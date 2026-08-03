@@ -21,7 +21,7 @@ class ProductServiceProvider extends ServiceProvider
         );
 
         $this->app->singleton('product.data', function ($app) {
-            return new \EvolutionCMS\Product\Services\ProductDataService();
+            return new \roilafx\Product\Services\ProductDataService();
         });
 
         $this->loadViewsFrom(
