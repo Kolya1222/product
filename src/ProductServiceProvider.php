@@ -5,6 +5,7 @@ namespace roilafx\Product;
 use EvolutionCMS\ServiceProvider;
 use Illuminate\Support\Facades\Route;
 use roilafx\Product\Console\Commands\GenerateTestData;
+use roilafx\Product\Console\Commands\WarmCatalogCache;
 use roilafx\Product\Models\ProductVariant;
 use roilafx\Product\Models\VariantAttributeValue;
 use roilafx\Product\Observers\ProductVariantObserver;
@@ -37,6 +38,7 @@ class ProductServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 GenerateTestData::class,
+                WarmCatalogCache::class,
             ]);
         }
 
