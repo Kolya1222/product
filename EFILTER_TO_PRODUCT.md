@@ -11,13 +11,14 @@
 
 namespace EvolutionCMS\Shop\Controllers;
 
-use EvolutionCMS\TemplateController;
+use EvolutionCMS\Shop\Controllers\BaseController;
 use roilafx\Product\Facades\ProductFilter;
 
-class CatalogController extends TemplateController
+class CatalogController extends BaseController
 {  
     public function process()
     {
+        parent::process();
         $catalogId = $this->id;
         $depth = 3; // Глубина поиска в подкатегориях
         $activeFilters = request('filters', []);
