@@ -19,7 +19,7 @@
         <div class="alert alert-danger">{{ session('error') }}</div>
     @endif
 
-    <form action="{{ route('presets.module.massAssign.store') }}" method="POST">
+    <form id="mass-assign-form" action="{{ route('presets.module.massAssign.store') }}" method="POST">
         @csrf
 
         <div class="form-group">
