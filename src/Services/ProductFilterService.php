@@ -39,7 +39,7 @@ class ProductFilterService
             });
         };
     }
-    
+
     public function getFilterStateLight(array $allAttributes, array $activeFilters = []): array
     {
         $filterStateLight = [];
@@ -86,15 +86,19 @@ class ProductFilterService
 
     public function getAttributesForCatalog(int $catalogId, int $depth = 0): array
     {
-        $productIdsSubQuery = $this->getProductIdsInCatalog($catalogId, $depth);
+        $cacheKey = "filter_attributes_{$catalogId}_{$depth}";
 
-        $attributeIds = ProductVariantAttribute::whereIn('product_id', $productIdsSubQuery)
-            ->pluck('attribute_id')->unique()->toArray();
+        return Cache::remember($cacheKey, $this->cacheTtl, function () use ($catalogId, $depth) {
+            $productIdsSubQuery = $this->getProductIdsInCatalog($catalogId, $depth);
 
-        return Attribute::whereIn('id', $attributeIds)
-            ->whereNotIn('field_type', ['custom_tv:multitv'])
-            ->get()
-            ->toArray();
+            $attributeIds = ProductVariantAttribute::whereIn('product_id', $productIdsSubQuery)
+                ->pluck('attribute_id')->unique()->toArray();
+
+            return Attribute::whereIn('id', $attributeIds)
+                ->whereNotIn('field_type', ['custom_tv:multitv'])
+                ->get()
+                ->toArray();
+        });
     }
 
     public function defaultOperator(string $fieldType): string
