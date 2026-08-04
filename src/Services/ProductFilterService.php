@@ -39,6 +39,50 @@ class ProductFilterService
             });
         };
     }
+    
+    public function getFilterStateLight(array $allAttributes, array $activeFilters = []): array
+    {
+        $filterStateLight = [];
+
+        foreach ($allAttributes as $attribute) {
+            $attrCode = $attribute['code'];
+            $displayType = $attribute['field_type'];
+            $displayOptions = $attribute['options'] ?? [];
+
+            $values = [];
+            if (in_array($displayType, ['select', 'dropdown', 'listbox', 'listbox-multiple', 'checkbox', 'option'])) {
+                foreach ($displayOptions as $opt) {
+                    $values[] = [
+                        'value'     => $opt,
+                        'count'     => 0,
+                        'available' => true,
+                    ];
+                }
+            }
+
+            $item = [
+                'id'            => $attribute['id'],
+                'code'          => $attrCode,
+                'name'          => $attribute['name'],
+                'type'          => $displayType,
+                'options'       => $displayOptions,
+                'values'        => $values,
+                'min'           => null,
+                'max'           => null,
+                'current_min'   => $activeFilters[$attrCode]['min'] ?? null,
+                'current_max'   => $activeFilters[$attrCode]['max'] ?? null,
+                'current_value' => is_array($activeFilters[$attrCode] ?? null) ? null : ($activeFilters[$attrCode] ?? null),
+                'filter'        => [
+                    'operator' => $this->defaultOperator($displayType),
+                    'field'    => $this->defaultField($displayType),
+                ],
+            ];
+
+            $filterStateLight[] = $item;
+        }
+
+        return $filterStateLight;
+    }
 
     public function getAttributesForCatalog(int $catalogId, int $depth = 0): array
     {
