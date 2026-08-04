@@ -382,7 +382,7 @@ class CatalogController extends BaseController
 ```blade
 @php
     // Безопасно извлекаем данные из объекта товара
-    $attrs = $item->attrs ?? [];
+    $attrs = (array) $item->attrs ?? [];
     
     // Если цена или теги хранятся как атрибуты, достаем их из JSON
     $price = $attrs['price'] ?? null;
