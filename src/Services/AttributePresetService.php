@@ -8,6 +8,8 @@ use roilafx\Product\Models\ProductPreset;
 use roilafx\Product\Models\ProductVariantAttribute;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
+use EvolutionCMS\Models\SiteContent;
+use roilafx\Product\Facades\ProductFilter;
 
 class AttributePresetService
 {
@@ -54,13 +56,17 @@ class AttributePresetService
 
     protected function syncAttributes(AttributePreset $preset, array $attributes): void
     {
+        $rows = [];
         foreach ($attributes as $attr) {
-            AttributePresetAttribute::firstOrCreate([
+            $rows[] = [
                 'preset_id'    => $preset->id,
                 'attribute_id' => $attr['attribute_id'],
-            ], [
-                'sort' => $attr['sort'] ?? 0,
-            ]);
+                'sort'         => $attr['sort'] ?? 0,
+                'is_required'  => true,
+            ];
+        }
+        if (!empty($rows)) {
+            AttributePresetAttribute::insert($rows);
         }
     }
 
@@ -85,5 +91,8 @@ class AttributePresetService
                 ['applied_at' => now()]
             );
         });
+        if ($product = SiteContent::find($productId)) {
+            ProductFilter::clearFilterCache($product->parent);
+        }
     }
 }

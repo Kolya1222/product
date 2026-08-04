@@ -233,8 +233,6 @@ class ProductFilterService
             return array_fill_keys($productIds, []);
         }
 
-        $attributeMap = Attribute::whereIn('code', $attrCodes)->pluck('id', 'code');
-
         if (!empty($variantMap)) {
             $jsonValues = ProductVariant::whereIn('id', $variantMap)
                 ->pluck('attrs_json', 'product_id');
@@ -278,6 +276,8 @@ class ProductFilterService
     ): array {
         $cacheKey = "filter_state_{$catalogId}_" . md5(serialize($activeFilters) . serialize($filterConfig) . $depth);
 
+        $this->storeCacheKeyForCategory($catalogId, $cacheKey);
+
         return Cache::remember($cacheKey, $this->cacheTtl, function () use ($catalogId, $activeFilters, $filterConfig, $depth) {
             $productIdsSubQuery = $this->getProductIdsInCatalog($catalogId, $depth);
 
@@ -286,7 +286,6 @@ class ProductFilterService
 
             $prefix = DB::getTablePrefix();
 
-            // 1. Динамические опции
             $dynamicOptions = [];
             $attrIdsNeedingOptions = [];
             foreach ($allAttributes as $attribute) {
@@ -315,14 +314,12 @@ class ProductFilterService
                 $dynamicOptions = $optionsRaw->toArray();
             }
 
-            // 2. Формируем базовый запрос
             $statsQuery = DB::table('variant_attribute_values as vav_stats')
                 ->join('product_variants as pv', 'pv.id', '=', 'vav_stats.variant_id')
                 ->whereIn('pv.product_id', $productIdsSubQuery)
                 ->where('pv.active', 1)
                 ->whereIn('vav_stats.attribute_id', array_column($allAttributes, 'id'));
 
-            // 3. МАГИЯ: Накладываем активные фильтры, но так, чтобы они не обнуляли текущий атрибут
             $hasActiveFilters = !empty($activeFilters);
             $whereClauses = [];
 
@@ -342,7 +339,6 @@ class ProductFilterService
                     $alias = "vav_f{$joinCount}";
                     $attrId = $attr->id;
 
-                    // Делаем LEFT JOIN, чтобы не потерять значения других атрибутов
                     $statsQuery->leftJoin("variant_attribute_values as {$alias}", function ($join) use ($attrId, $value, $alias, $operator, $field) {
                         $join->on('pv.id', '=', "{$alias}.variant_id")
                             ->where("{$alias}.attribute_id", $attrId);
@@ -384,8 +380,6 @@ class ProductFilterService
                         }
                     });
 
-                    // САМОЕ ВАЖНОЕ УСЛОВИЕ:
-                    // Обязательно добавляем префикс к алиасам в raw запросе!
                     if (in_array($operator, ['notin', 'neq'])) {
                         $whereClauses[] = "(`{$prefix}vav_stats`.`attribute_id` = {$attrId} OR `{$prefix}{$alias}`.`variant_id` IS NULL)";
                     } else {
@@ -398,7 +392,6 @@ class ProductFilterService
                 }
             }
 
-            // 4. Агрегация
             $statsQuery->select(
                 'vav_stats.attribute_id',
                 'vav_stats.value',
@@ -410,7 +403,6 @@ class ProductFilterService
 
             $rawStats = $statsQuery->get();
 
-            // 5. Группировка и сборка
             $groupedStats = [];
             foreach ($rawStats as $row) {
                 $aid = $row->attribute_id;
@@ -550,13 +542,33 @@ class ProductFilterService
         $cacheKey = 'filter_results_' . $catalogId . '_' .
             md5(serialize($filters) . $perPage . $sort . implode(',', $withAttributes) . ($page ?? 1) . serialize($filterConfig) . $depth);
 
+        $this->storeCacheKeyForCategory($catalogId, $cacheKey);
+
         return Cache::remember($cacheKey, $this->cacheTtl, function () use ($catalogId, $filters, $perPage, $sort, $withAttributes, $page, $filterConfig, $depth) {
             return $this->getFilteredProductsWithAttributes($catalogId, $filters, $perPage, $sort, $withAttributes, $page, $filterConfig, $depth);
         });
     }
 
+    protected function storeCacheKeyForCategory(int $catalogId, string $key): void
+    {
+        $registryKey = "filter_keys_registry_{$catalogId}";
+        $keys = Cache::get($registryKey, []);
+
+        if (!in_array($key, $keys)) {
+            $keys[] = $key;
+            Cache::put($registryKey, $keys, $this->cacheTtl + 60);
+        }
+    }
+
     public function clearFilterCache(int $catalogId): void
     {
-        Cache::forget("filter_catalog_{$catalogId}");
+        $registryKey = "filter_keys_registry_{$catalogId}";
+        $keys = Cache::get($registryKey, []);
+
+        foreach ($keys as $key) {
+            Cache::forget($key);
+        }
+
+        Cache::forget($registryKey);
     }
 }

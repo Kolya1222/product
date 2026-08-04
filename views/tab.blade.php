@@ -1,7 +1,7 @@
 <div id="variants-app" data-product-id="{{ $productId }}">
     <p id="no-attributes-msg" style="display:none;">
-        <i class="fa fa-info-circle"></i> Чтобы добавить вариации, сначала <a href="#"
-            id="setup-fields-link">настройте поля</a>.
+        <i class="fa fa-info-circle"></i> Чтобы добавить вариации, сначала <a href="#" id="setup-fields-link">настройте
+            поля</a>.
     </p>
     <div id="variants-content" style="display:none;">
         <p>
@@ -44,7 +44,7 @@
 </script>
 <script src="{{ asset('/js/product-variants.js') }}"></script>
 <script>
-    jQuery(document).ready(function() {
+    jQuery(document).ready(function () {
         VariantsTab.init({
             productId: {{ $productId }},
             csrfToken: '{{ csrf_token() }}',

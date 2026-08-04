@@ -5,16 +5,21 @@ namespace roilafx\Product\Services;
 use roilafx\Product\Models\Attribute;
 use roilafx\Product\Models\AttributeCategory;
 use roilafx\Product\Models\ProductVariantAttribute;
+use EvolutionCMS\Models\SiteContent;
+use roilafx\Product\Facades\ProductFilter;
 use Illuminate\Support\Facades\DB;
 
 class AttributeService
 {
     public function getGroupedAttributesByProduct(int $productId): array
     {
-        $assigned = ProductVariantAttribute::where('product_id', $productId)->pluck('attribute_id');
-        $attributes = Attribute::with('category')->get()->each(function ($attr) use ($assigned) {
-            $attr->assigned = $assigned->contains($attr->id);
-        });
+        $assignedIds = ProductVariantAttribute::where('product_id', $productId)->pluck('attribute_id')->toArray();
+
+        if (empty($assignedIds)) {
+            return [];
+        }
+
+        $attributes = Attribute::with('category')->whereIn('id', $assignedIds)->get();
 
         $grouped = $attributes->groupBy(fn($attr) => $attr->category_id ?? 0);
 
@@ -23,15 +28,13 @@ class AttributeService
             if ($categoryId === 0) {
                 $category = (new AttributeCategory)->forceFill(['id' => 0, 'name' => 'Без категории']);
             } else {
-                $category = AttributeCategory::find($categoryId);
+                $category = $attrs->first()->category;
             }
-
             $result[] = [
                 'category'   => $category->toArray(),
                 'attributes' => $attrs->values(),
             ];
         }
-
         return $result;
     }
 
@@ -47,13 +50,20 @@ class AttributeService
                     ->whereIn('attribute_id', $toDelete)
                     ->delete();
             }
-            foreach ($toAdd as $attrId) {
-                ProductVariantAttribute::create([
-                    'product_id'   => $productId,
-                    'attribute_id' => $attrId,
-                ]);
+            
+            if (!empty($toAdd)) {
+                $rows = array_map(fn($attrId) => [
+                    'product_id' => $productId, 
+                    'attribute_id' => $attrId
+                ], $toAdd);
+                
+                ProductVariantAttribute::insert($rows);
             }
         });
+
+        if ($product = SiteContent::find($productId)) {
+            ProductFilter::clearFilterCache($product->parent);
+        }
     }
 
     public function createAttribute(array $data, ?int $productId = null): Attribute

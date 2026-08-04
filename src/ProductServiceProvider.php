@@ -5,6 +5,10 @@ namespace roilafx\Product;
 use EvolutionCMS\ServiceProvider;
 use Illuminate\Support\Facades\Route;
 use roilafx\Product\Console\Commands\GenerateTestData;
+use roilafx\Product\Models\ProductVariant;
+use roilafx\Product\Models\VariantAttributeValue;
+use roilafx\Product\Observers\ProductVariantObserver;
+use roilafx\Product\Observers\VariantAttributeValueObserver;
 
 class ProductServiceProvider extends ServiceProvider
 {
@@ -16,13 +20,28 @@ class ProductServiceProvider extends ServiceProvider
      */
     public function register()
     {
-        $this->loadPluginsFrom(
-            dirname(__DIR__) . '/plugins/'
-        );
-
         $this->app->singleton('product.data', function ($app) {
             return new \roilafx\Product\Services\ProductDataService();
         });
+    }
+
+    /**
+     * Bootstrap any application services.
+     */
+    public function boot(): void
+    {
+        $this->loadPluginsFrom(
+            dirname(__DIR__) . '/plugins/'
+        );
+        
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                GenerateTestData::class,
+            ]);
+        }
+
+        ProductVariant::observe(ProductVariantObserver::class);
+        VariantAttributeValue::observe(VariantAttributeValueObserver::class);
 
         $this->loadViewsFrom(
             dirname(__DIR__) . '/views/',
@@ -48,18 +67,5 @@ class ProductServiceProvider extends ServiceProvider
             __DIR__ . '/../routes/preset-module.php',
             'fa fa-magic'
         );
-    }
-
-    /**
-     * Bootstrap any application services.
-     */
-    public function boot(): void
-    {
-        // Регистрируем консольную команду
-        if ($this->app->runningInConsole()) {
-            $this->commands([
-                GenerateTestData::class,
-            ]);
-        }
     }
 }

@@ -5,6 +5,7 @@ namespace roilafx\Product\Services;
 use roilafx\Product\Models\Attribute;
 use roilafx\Product\Models\ProductVariant;
 use roilafx\Product\Models\ProductVariantAttribute;
+use roilafx\Product\Models\VariantAttributeValue;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
 
@@ -15,14 +16,11 @@ class ProductVariantService
         $cacheKey = 'product_variants_' . $productId;
         return Cache::remember($cacheKey, 600, function () use ($productId) {
             return ProductVariant::where('product_id', $productId)
-                ->with('attributeValues.attribute')
+                ->where('active', 1)
                 ->orderBy('sort')
                 ->get()
                 ->map(function ($variant) {
-                    $attrs = $variant->attributeValues->mapWithKeys(function ($item) {
-                        return [$item->attribute->code => $item->value];
-                    });
-                    return ['id' => $variant->id, 'attrs' => $attrs];
+                    return ['id' => $variant->id, 'attrs' => json_decode($variant->attrs_json, true) ?? []];
                 })
                 ->toArray();
         });
@@ -75,22 +73,31 @@ class ProductVariantService
     {
         $variant->attributeValues()->delete();
 
+        if (empty($attrs)) {
+            $this->updateVariantJson($variant);
+            return;
+        }
+
+        $attributes = Attribute::whereIn('code', array_keys($attrs))->get()->keyBy('code');
+
+        $insertData = [];
         foreach ($attrs as $code => $value) {
-            $attribute = Attribute::where('code', $code)->first();
+            $attribute = $attributes->get($code);
             if (!$attribute) {
                 continue;
             }
 
             $data = [
+                'variant_id'   => $variant->id,
                 'attribute_id' => $attribute->id,
                 'value'        => $value,
+                'value_numeric' => ($attribute->field_type === 'number' && is_numeric($value)) ? (float)$value : null,
             ];
+            $insertData[] = $data;
+        }
 
-            if ($attribute->field_type === 'number' && is_numeric($value)) {
-                $data['value_numeric'] = (float) $value;
-            }
-
-            $variant->attributeValues()->create($data);
+        if (!empty($insertData)) {
+            VariantAttributeValue::insert($insertData); 
         }
 
         $this->updateVariantJson($variant);
