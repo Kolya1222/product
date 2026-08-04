@@ -12,7 +12,7 @@ class GenerateTestData extends Command
     protected $signature = 'product:generate-test-data';
     protected $description = 'Генерация тестовых товаров, атрибутов, вариантов и пресетов';
 
-    protected int $productsCount = 5000;
+    protected int $productsCount = 100000;
     protected int $categoriesCount = 10;
     protected int $maxVariants = 6;
     protected int $variantProbability = 70;
