@@ -14,15 +14,9 @@ class AttributeService
     public function getGroupedAttributesByProduct(int $productId): array
     {
         $assignedIds = ProductVariantAttribute::where('product_id', $productId)->pluck('attribute_id')->toArray();
-
-        if (empty($assignedIds)) {
-            return [];
-        }
-
-        $attributes = Attribute::with('category')->whereIn('id', $assignedIds)->get();
-
-        $grouped = $attributes->groupBy(fn($attr) => $attr->category_id ?? 0);
-
+        $allAttributes = Attribute::with('category')->get();
+        $grouped = $allAttributes->groupBy(fn($attr) => $attr->category_id ?? 0);
+    
         $result = [];
         foreach ($grouped as $categoryId => $attrs) {
             if ($categoryId === 0) {
@@ -30,9 +24,15 @@ class AttributeService
             } else {
                 $category = $attrs->first()->category;
             }
+            $attrsWithAssigned = $attrs->map(function ($attr) use ($assignedIds) {
+                $attrArray = $attr->toArray();
+                $attrArray['assigned'] = in_array($attr->id, $assignedIds);
+                return $attrArray;
+            })->values()->all();
+    
             $result[] = [
                 'category'   => $category->toArray(),
-                'attributes' => $attrs->values(),
+                'attributes' => $attrsWithAssigned,
             ];
         }
         return $result;
