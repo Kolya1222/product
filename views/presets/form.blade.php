@@ -32,10 +32,10 @@
             @foreach ($oldAttrs as $index => $attr)
                 <div class="attr-row" style="margin-bottom:5px;">
                     <select name="attributes[{{ $index }}][attribute_id]" class="form-control attr-select"
-                        style="width:250px; display:inline-block;">
+                        data-selected="{{ $attr['attribute_id'] ?? '' }}" style="width:250px; display:inline-block;">
                         <option value="">-- Выберите атрибут --</option>
                         @foreach ($allAttributes as $a)
-                            <option value="{{ $a->id }}" @if ((int) $a->id == (int) $attr['attribute_id']) selected @endif>
+                            <option value="{{ $a->id }}" @if ((int) $a->id === (int) ($attr['attribute_id'] ?? 0)) selected @endif>
                                 {{ $a->name }} ({{ $a->code }})
                             </option>
                         @endforeach

@@ -169,7 +169,7 @@
                     self.allAttributes.push(response.attribute);
                     self.refreshAllAttrSelects();
                     var row = '<div class="attr-row" style="margin-bottom:5px;">' +
-                        '<select name="attributes[' + self.attrIndex + '][attribute_id]" class="form-control attr-select" style="width:250px; display:inline-block;">' +
+                        '<select name="attributes[' + self.attrIndex + '][attribute_id]" class="form-control attr-select" data-selected="' + response.attribute.id + '" style="width:250px; display:inline-block;">' +
                         '<option value="">-- Выберите атрибут --</option>' +
                         self.allAttributes.map(function (a) {
                             return '<option value="' + a.id + '"' + (a.id == response.attribute.id ? ' selected' : '') + '>' + a.name + ' (' + a.code + ')</option>';
@@ -194,7 +194,7 @@
 
             $('#add-attr').off('click').on('click', function () {
                 var row = '<div class="attr-row" style="margin-bottom:5px;">' +
-                    '<select name="attributes[' + self.attrIndex + '][attribute_id]" class="form-control attr-select" style="width:250px; display:inline-block;">' +
+                    '<select name="attributes[' + self.attrIndex + '][attribute_id]" class="form-control attr-select" data-selected="" style="width:250px; display:inline-block;">' +
                     '<option value="">-- Выберите атрибут --</option>' +
                     self.allAttributes.map(function (a) {
                         return '<option value="' + a.id + '">' + a.name + ' (' + a.code + ')</option>';
@@ -216,14 +216,16 @@
         refreshAllAttrSelects: function () {
             var self = this;
             $('.attr-select').each(function () {
-                var selected = $(this).val();
+                var $this = $(this);
+                var selected = $this.data('selected') || $this.val();
+
                 var options = '<option value="">-- Выберите атрибут --</option>';
                 self.allAttributes.forEach(function (a) {
                     options += '<option value="' + a.id + '"' + (a.id == selected ? ' selected' : '') + '>' + a.name + ' (' + a.code + ')</option>';
                 });
-                $(this).html(options);
+                $this.html(options);
             });
-        }
+        },
     };
 
     window.VariantsTab = {
