@@ -31,6 +31,14 @@
                 @endforeach
             </select>
         </div>
+        
+        <div class="form-group">
+            <label>Куда применять?</label>
+            <select name="target" class="form-control">
+                <option value="variant">Атрибуты для вариаций</option>
+                <option value="general">Общие атрибуты товара</option>
+            </select>
+        </div>
 
         <div class="form-group">
             <label>Режим</label>

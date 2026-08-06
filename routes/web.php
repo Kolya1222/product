@@ -23,6 +23,9 @@ Route::middleware([
         Route::post('/assign',   [AttributeController::class, 'assign']);
         Route::post('/',         [AttributeController::class, 'store']);
         Route::get('/types',     [AttributeController::class, 'types']);
+        Route::get('/general-form', [AttributeController::class, 'generalForm'])->name('attr.generalForm');
+        Route::post('/general-save', [AttributeController::class, 'saveGeneralValues'])->name('attr.generalSave');
+        Route::post('/general-assign', [AttributeController::class, 'assignGeneralAttributes'])->name('attr.generalAssign');
         Route::get('/{id}',      [AttributeController::class, 'show']);
         Route::put('/{id}',      [AttributeController::class, 'update']);
         Route::delete('/{id}',   [AttributeController::class, 'destroy']);

@@ -512,4 +512,115 @@
             });
         }
     };
+    window.GeneralAttributesTab = {
+        init: function (config) {
+            this.productId = config.productId;
+            this.urls = config.urls;
+            this.csrfToken = config.csrfToken;
+            var self = this;
+
+            $('.js-setup-general-fields-btn').off('click').on('click', function () {
+                self.refreshCheckboxes();
+                $('#setupGeneralFieldsModal').show();
+            });
+
+            $('#setupGeneralFieldsModal .js-save-fields-btn').off('click').on('click', function () {
+                var ids = $('#setupGeneralFieldsModal .js-attributes-checkboxes input:checked').map(function () {
+                    return this.value;
+                }).get();
+
+                $.ajax({
+                    url: self.urls.attributesAssign,
+                    method: 'POST',
+                    data: {
+                        product_id: self.productId,
+                        attribute_ids: ids,
+                        _token: self.csrfToken
+                    },
+                    success: function () {
+                        $('#setupGeneralFieldsModal').hide();
+                        self.checkAssigned();
+                    },
+                    error: function (xhr) {
+                        alert('Ошибка: ' + (xhr.responseJSON?.message || ''));
+                    }
+                });
+            });
+
+            $('.js-edit-general-fields-btn').off('click').on('click', function () {
+                self.openGeneralForm();
+            });
+
+            $('#save-general-attrs-btn').off('click').on('click', function () {
+                var form = $('#general-attrs-form');
+                var data = {
+                    product_id: form.find('input[name="product_id"]').val(),
+                    _token: self.csrfToken,
+                    attrs: {}
+                };
+
+                $('[name^="attrs["]').each(function () {
+                    var name = $(this).attr('name');
+                    var code = name.match(/\[(.*?)\]/)[1];
+                    if ($(this).attr('type') === 'checkbox') {
+                        data.attrs[code] = $(this).is(':checked') ? $(this).val() : '';
+                    } else {
+                        data.attrs[code] = $(this).val();
+                    }
+                });
+
+                $.ajax({
+                    url: self.urls.generalSave,
+                    method: 'POST',
+                    data: data,
+                    success: function () {
+                        $('#generalAttrsModal').hide();
+                    },
+                    error: function (xhr) {
+                        alert('Ошибка сохранения: ' + (xhr.responseJSON?.message || ''));
+                    }
+                });
+            });
+
+            this.checkAssigned();
+        },
+
+        refreshCheckboxes: function () {
+            var self = this;
+            $.get(this.urls.attributesList, { product_id: this.productId, type: 'general' }, function (data) {
+                var html = '';
+                data.categories.forEach(function (group) {
+                    html += '<h6>' + group.category.name + '</h6>';
+                    group.attributes.forEach(function (a) {
+                        html += '<div><label><input type="checkbox" value="' + a.id + '" ' + (a.assigned ? 'checked' : '') + '> ' + a.name + ' (' + a.code + ')</label></div>';
+                    });
+                });
+                $('#setupGeneralFieldsModal .js-attributes-checkboxes').html(html);
+            });
+        },
+
+        checkAssigned: function () {
+            var self = this;
+            $.get(this.urls.attributesList, { product_id: this.productId, type: 'general' }, function (data) {
+                var hasAssigned = false;
+                data.categories.forEach(function (g) {
+                    if (g.attributes.some(a => a.assigned)) hasAssigned = true;
+                });
+
+                if (hasAssigned) {
+                    $('.js-edit-general-fields-btn').show();
+                } else {
+                    $('.js-edit-general-fields-btn').hide();
+                }
+            });
+        },
+
+        openGeneralForm: function () {
+            $('#generalAttrsModalBody').html('<p class="text-center">Загрузка...</p>');
+            $('#generalAttrsModal').show();
+            $.get(this.urls.generalForm, { product_id: this.productId }, function (html) {
+                $('#generalAttrsModalBody').html(html);
+            });
+        }
+    };
 })(jQuery);

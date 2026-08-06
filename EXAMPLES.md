@@ -17,14 +17,14 @@
 
 ## 1. Работа с атрибутами (AttributeService)
 
-Сервис `AttributeService` отвечает за создание атрибутов, их категоризацию и назначение товарам.
+Сервис `AttributeService` отвечает за создание атрибутов, их категоризацию и назначение товарам (как для вариаций, так и общих характеристик).
 
 ### Создание нового атрибута с привязкой к товару
 
 Если атрибут создается в контексте товара, его можно сразу назначить:
 
 ```php
-use EvolutionCMS\Product\Services\AttributeService;
+use roilafx\Product\Services\AttributeService;
 
 $attributeService = app(AttributeService::class);
 
@@ -36,28 +36,36 @@ $attribute = $attributeService->createAttribute(
         'options'    => null,
         'category_id' => 1,
     ],
-    $productId = 15 // Сразу назначим товару
+    $productId = 15 // Сразу назначим товару как поле для вариаций
 );
 ```
 
-### Групповое назначение/снятие атрибутов с товара
+### Назначение атрибутов товару
 
-Метод `assignAttributesToProduct` использует diff-логику: он удалит неотмеченные атрибуты и добавит новые, не трогая существующие значения вариантов.
+Методы `assignAttributesToProduct` и `assignGeneralAttributesToProduct` используют diff-логику: они удалят неотмеченные атрибуты и добавят новые, не трогая существующие значения.
 
 ```php
-$attributeService->assignAttributesToProduct(15, [1, 3, 5]); // ID атрибутов
+// Назначить атрибуты для вариаций
+$attributeService->assignAttributesToProduct(15, [1, 3, 5]); 
+
+// Назначить общие характеристики (Бренд, Страна и т.д.)
+$attributeService->assignGeneralAttributesToProduct(15, [7, 8]);
 ```
 
 ### Получение атрибутов, сгруппированных по категориям
 
-Идеально для рендеринга админ-панели:
+Универсальный метод `getGroupedAttributesByProduct` принимает вторым аргументом тип атрибутов (`'variant'` или `'general'`). Для общих атрибутов он также вернет их текущие значения.
 
 ```php
-$grouped = $attributeService->getGroupedAttributesByProduct(15);
+// Получаем общие характеристики с их значениями
+$groupedGeneral = $attributeService->getGroupedAttributesByProduct(15, 'general');
+
 // Результат:
 // [
-//   ['category' => [...], 'attributes' => [...]],
-//   ['category' => ['id' => 0, 'name' => 'Без категории'], 'attributes' => [...]]
+//   ['category' => [...], 'attributes' => [
+//      ['id' => 7, 'name' => 'Бренд', 'assigned' => true, 'value' => 'Apple'],
+//      ...
+//   ]]
 // ]
 ```
 
@@ -72,7 +80,7 @@ $grouped = $attributeService->getGroupedAttributesByProduct(15);
 При создании варианта сервис проверяет, разрешен ли этот атрибут для товара, сохраняет значения в БД и автоматически обновляет `attrs_json`.
 
 ```php
-use EvolutionCMS\Product\Services\ProductVariantService;
+use roilafx\Product\Services\ProductVariantService;
 
 $variantService = app(ProductVariantService::class);
 
@@ -93,7 +101,7 @@ try {
 Метод `updateVariant` полностью синхронизирует переданные значения. Если вы не передадите какой-то атрибут, он будет удален из варианта.
 
 ```php
-$variant = \EvolutionCMS\Product\Models\ProductVariant::find(1);
+$variant = \roilafx\Product\Models\ProductVariant::find(1);
 
 $variantService->updateVariant($variant, [
     'color' => 'Белый',
@@ -106,19 +114,22 @@ $variantService->updateVariant($variant, [
 
 ## 3. Вывод каталога и Фильтрация (ProductFilterService)
 
-Ядро пакета, отвечающее за фасетный поиск.
+Ядро пакета, отвечающее за фасетный поиск. Оптимизировано для работы с 100 000+ товаров.
 
-### Базовый вывод с фильтрами
+### Базовый вывод с фильтрами (с использованием кэша)
+
+Рекомендуется всегда использовать метод `getCachedFilteredProducts`, который автоматически закэширует результат пагинации на 1 час.
 
 ```php
-$filterService = app(\EvolutionCMS\Product\Services\ProductFilterService::class);
+$filterService = app(\roilafx\Product\Services\ProductFilterService::class);
 
 $catalogId = 2;
 $depth = 3;
 
 $allAttributes = $filterService->getAttributesForCatalog($catalogId, $depth);
+$filterState = $filterService->getFilterStateLight($allAttributes, request('filters', []));
 
-$paginator = $filterService->getFilteredProductsWithAttributes(
+$paginator = $filterService->getCachedFilteredProducts(
     $catalogId,
     request('filters', []),
     12,
@@ -163,7 +174,7 @@ $paginator = $filterService->getCachedFilteredProducts(
 
 ### Ручной сброс кэша фильтров
 
-Кэш сбрасывается через Observers автоматически, но если вы массово меняли товары через SQL:
+Кэш сбрасывается через Observers автоматически (с учетом всех родительских категорий), но если вы массово меняли товары через SQL:
 
 ```php
 $filterService->clearFilterCache($catalogId);
@@ -173,12 +184,12 @@ $filterService->clearFilterCache($catalogId);
 
 ## 4. Пресеты и массовое назначение (AttributePresetService)
 
-Пресеты позволяют применять наборы атрибутов к товарам.
+Пресеты позволяют применять наборы атрибутов к товарам. Поддерживается применение как к вариациям, так и к общим характеристикам.
 
 ### Создание пресета
 
 ```php
-$presetService = app(\EvolutionCMS\Product\Services\AttributePresetService::class);
+$presetService = app(\roilafx\Product\Services\AttributePresetService::class);
 
 $preset = $presetService->create([
     'name' => 'Характеристики ноутбука',
@@ -192,11 +203,16 @@ $preset = $presetService->create([
 
 ### Применение пресета к товарам (Массовое назначение)
 
-В контроллере массового назначения (`PresetMassAssignController`) используется метод `applyToProduct`. Он поддерживает два режима: `replace` (удалить старые атрибуты товара и поставить из пресета) и `add` (добавить к существующим).
+Метод `applyToProduct` поддерживает два режима: `replace` (удалить старые атрибуты товара и поставить из пресета) и `add` (добавить к существующим). Третьим параметром указывается `target` (`'variant'` или `'general'`).
 
 ```php
-// Применяем пресет ID=1 к товару ID=50 в режиме замены
-$presetService->applyToProduct(50, \EvolutionCMS\Product\Models\AttributePreset::find(1), 'replace');
+// Применяем пресет ID=1 к товару ID=50 в режиме замены для ОБЩИХ атрибутов
+$presetService->applyToProduct(
+    50, 
+    \roilafx\Product\Models\AttributePreset::find(1), 
+    'replace',
+    'general'
+);
 ```
 
 ---
@@ -210,7 +226,7 @@ $presetService->applyToProduct(50, \EvolutionCMS\Product\Models\AttributePreset:
 В карточке товара (SiteTemplate) подключите:
 ```blade
 @php
-    $variants = \EvolutionCMS\Product\Facades\ProductData::getVariants($product->id);
+    $variants = \roilafx\Product\Facades\ProductData::getVariants($product->id);
 @endphp
 
 @if($variants->isNotEmpty())
@@ -243,7 +259,7 @@ $presetService->applyToProduct(50, \EvolutionCMS\Product\Models\AttributePreset:
         <div class="filter-section" data-code="{{ $attr['code'] }}">
             <h3>{{ $attr['name'] }}</h3>
             
-            @if($attr['type'] === 'number')
+            @if(in_array($attr['type'], ['number', 'range']))
                 <input type="number" name="filters[{{ $attr['code'] }}][min]" placeholder="от {{ $attr['min'] ?? '' }}">
                 <input type="number" name="filters[{{ $attr['code'] }}][max]" placeholder="до {{ $attr['max'] ?? '' }}">
             @elseif(in_array($attr['type'], ['select', 'dropdown', 'checkbox']))
@@ -264,7 +280,7 @@ $presetService->applyToProduct(50, \EvolutionCMS\Product\Models\AttributePreset:
 
 ### JavaScript: Обработка AJAX-фильтрации и пагинации
 
-Пример чистого JS (Vanilla) скрипта, который обрабатывает форму, запрашивает товары и обновляет счетчики.
+Современный пример на чистом JS (Vanilla), использующий `Promise.all` для параллельного запроса товаров и счетчиков.
 
 ```javascript
 document.addEventListener('DOMContentLoaded', function() {
@@ -279,47 +295,32 @@ document.addEventListener('DOMContentLoaded', function() {
     const filterApiUrl = `/catalog/${catalogId}/filter`;
     const stateApiUrl = `/catalog/${catalogId}/filter-state`;
 
-    // Утилита: собрать параметры
+    // Сборка параметров формы
     function getParams() {
         return new URLSearchParams(new FormData(form)).toString();
     }
 
-    // Утилита: получить только активные фильтры для state-запроса
-    function getFiltersObject() {
-        const data = {};
-        new FormData(form).forEach((value, key) => {
-            if (key.startsWith('filters[')) {
-                // Грубый парсинг, для точного используйте регулярки из основного скрипта
-                let match = key.match(/filters\[(.+?)\](\[\])?/);
-                if (match) {
-                    let code = match[1];
-                    if (match[2]) {
-                        if (!data[code]) data[code] = [];
-                        data[code].push(value);
-                    } else {
-                        data[code] = value;
-                    }
-                }
-            }
-        });
-        return data;
-    }
-
-    // Запрос товаров
-    async function fetchProducts() {
+    // Запрос товаров и счетчиков
+    async function applyFilters() {
         grid.style.opacity = 0.5;
         const params = getParams();
         
-        // Обновляем URL
+        // Обновляем URL без перезагрузки
         window.history.pushState({}, '', `${window.location.pathname}?${params}`);
 
         try {
-            const res = await fetch(`${filterApiUrl}?${params}`);
-            const data = await res.json();
-            
-            if (data.success) {
-                renderProducts(data.items);
-                renderPagination(data.pagination);
+            // Параллельно запрашиваем товары и состояние фильтров
+            const [productsRes, stateRes] = await Promise.all([
+                fetch(`${filterApiUrl}?${params}`).then(res => res.json()),
+                fetch(`${stateApiUrl}?${params}`).then(res => res.json())
+            ]);
+
+            if (productsRes.success) {
+                renderProducts(productsRes.items);
+                renderPagination(productsRes.pagination);
+            }
+            if (stateRes.success) {
+                updateCounters(stateRes.state);
             }
         } catch (e) {
             console.error(e);
@@ -328,54 +329,31 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Запрос счетчиков
-    async function fetchState() {
-        const filters = getFiltersObject();
-        const params = new URLSearchParams();
-        
-        for (const [code, value] of Object.entries(filters)) {
-            if (Array.isArray(value)) {
-                value.forEach(v => params.append(`filters[${code}][]`, v));
-            } else {
-                params.append(`filters[${code}]`, value);
-            }
-        }
-        if (depthInput) params.append('depth', depthInput.value);
-
-        try {
-            const res = await fetch(`${stateApiUrl}?${params.toString()}`);
-            const data = await res.json();
-            
-            if (data.success) {
-                updateCounters(data.state);
-            }
-        } catch (e) {
-            console.error(e);
-        }
-    }
-
     // Обновление DOM счетчиками
     function updateCounters(state) {
         state.forEach(attr => {
             if (!attr.values) return;
             attr.values.forEach(val => {
-                const label = form.querySelector(`input[value="${val.value}"]`).closest('label');
+                const input = form.querySelector(`input[value="${val.value}"]`);
+                if (!input) return;
+                
+                const label = input.closest('label');
                 const countSpan = label.querySelector('.count');
                 
                 if (countSpan) countSpan.textContent = val.count;
                 
                 if (val.available) {
                     label.classList.remove('disabled');
-                    label.querySelector('input').disabled = false;
+                    input.disabled = false;
                 } else {
                     label.classList.add('disabled');
-                    label.querySelector('input').disabled = true;
+                    input.disabled = true;
                 }
             });
         });
     }
 
-    // Рендер пагинации (простой пример)
+    // Рендер пагинации
     function renderPagination(p) {
         if (!p || p.last_page <= 1) {
             pagination.innerHTML = '';
@@ -389,17 +367,21 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // События
-    form.addEventListener('change', () => {
-        fetchProducts();
-        fetchState();
-    });
+    form.addEventListener('change', () => applyFilters());
 
     pagination.addEventListener('click', (e) => {
         if (e.target.matches('.pagination-item')) {
             e.preventDefault();
             const page = new URLSearchParams(e.target.href.split('?')[1]).get('page');
-            form.querySelector('input[name="page"]').value = page;
-            fetchProducts();
+            form.querySelector('input[name="page"]')?.remove();
+            
+            const hiddenInput = document.createElement('input');
+            hiddenInput.type = 'hidden';
+            hiddenInput.name = 'page';
+            hiddenInput.value = page;
+            form.appendChild(hiddenInput);
+            
+            applyFilters();
         }
     });
 });

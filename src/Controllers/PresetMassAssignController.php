@@ -20,9 +20,9 @@ class PresetMassAssignController extends TemplateController
     public function form()
     {
         $presets = $this->presetService->getAll();
-        $rootIds = \EvolutionCMS\Models\SiteContent::where('parent', 0)->pluck('id');
+        $rootIds = SiteContent::where('parent', 0)->pluck('id');
 
-        $resources = \EvolutionCMS\Models\SiteContent::select(
+        $resources = SiteContent::select(
             'site_content.id',
             'site_content.pagetitle',
             'site_content.parent',
@@ -53,6 +53,7 @@ class PresetMassAssignController extends TemplateController
     {
         $presetId = $request->input('preset_id');
         $mode = $request->input('mode', 'replace');
+        $target = $request->input('target', 'variant');
         $includeChildren = $request->has('include_children');
         $onlyChildren = $request->has('only_children');
         $resourceIds = $request->input('resource_ids', []);
@@ -88,7 +89,8 @@ class PresetMassAssignController extends TemplateController
             $this->presetService->applyToProduct(
                 $productId,
                 $preset,
-                $mode
+                $mode,
+                $target
             );
             $processed++;
         }
@@ -100,7 +102,7 @@ class PresetMassAssignController extends TemplateController
     public function children(Request $request)
     {
         $parentId = $request->input('id', 0);
-        $resources = \EvolutionCMS\Models\SiteContent::select(
+        $resources = SiteContent::select(
             'site_content.id',
             'site_content.pagetitle as text',
             'site_content.isfolder as children'

@@ -2,14 +2,15 @@
 
 namespace roilafx\Product\Services;
 
-use roilafx\Product\Models\AttributePreset;
-use roilafx\Product\Models\AttributePresetAttribute;
-use roilafx\Product\Models\ProductPreset;
-use roilafx\Product\Models\ProductVariantAttribute;
+use EvolutionCMS\Models\SiteContent;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
-use EvolutionCMS\Models\SiteContent;
 use roilafx\Product\Facades\ProductFilter;
+use roilafx\Product\Models\AttributePreset;
+use roilafx\Product\Models\AttributePresetAttribute;
+use roilafx\Product\Models\ProductAttribute;
+use roilafx\Product\Models\ProductPreset;
+use roilafx\Product\Models\ProductVariantAttribute;
 
 class AttributePresetService
 {
@@ -70,17 +71,23 @@ class AttributePresetService
         }
     }
 
-    public function applyToProduct(int $productId, AttributePreset $preset, string $mode = 'replace'): void
+    public function applyToProduct(int $productId, AttributePreset $preset, string $mode = 'replace', string $target = 'variant'): void
     {
-        DB::transaction(function () use ($productId, $preset, $mode) {
+        DB::transaction(function () use ($productId, $preset, $mode, $target) {
             $attributeIds = $preset->attributes()->pluck('attribute_id')->toArray();
 
+            if ($target === 'general') {
+                $model = ProductAttribute::class;
+            } else {
+                $model = ProductVariantAttribute::class;
+            }
+
             if ($mode === 'replace') {
-                ProductVariantAttribute::where('product_id', $productId)->delete();
+                $model::where('product_id', $productId)->delete();
             }
 
             foreach ($attributeIds as $attrId) {
-                ProductVariantAttribute::firstOrCreate([
+                $model::firstOrCreate([
                     'product_id' => $productId,
                     'attribute_id' => $attrId,
                 ]);
@@ -91,6 +98,7 @@ class AttributePresetService
                 ['applied_at' => now()]
             );
         });
+        
         if ($product = SiteContent::find($productId)) {
             ProductFilter::clearFilterCache($product->parent);
         }

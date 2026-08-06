@@ -14,13 +14,86 @@ class ProductFilterService
 {
     protected int $cacheTtl = 3600;
 
-    protected function getProductIdsInCatalog(int $catalogId, int $depth = 0): \Closure
+    protected function applyFilterCondition($query, string $field, string $operator, $value): void
     {
-        return function ($q) use ($catalogId, $depth) {
-            $q->select('id')->from('site_content')
-                ->where('published', 1)
-                ->where('deleted', 0);
+        switch ($operator) {
+            case 'eq':
+                $query->where($field, $value);
+                break;
+            case 'neq':
+                $query->where($field, '!=', $value);
+                break;
+            case 'like':
+                $query->where($field, 'LIKE', '%' . $value . '%');
+                break;
+            case 'between':
+                if (is_array($value)) {
+                    if (isset($value['min']) && $value['min'] !== '') $query->where($field, '>=', (float)$value['min']);
+                    if (isset($value['max']) && $value['max'] !== '') $query->where($field, '<=', (float)$value['max']);
+                }
+                break;
+            case 'in':
+                $query->whereIn($field, (array)$value);
+                break;
+            case 'notin':
+                $query->whereNotIn($field, (array)$value);
+                break;
+            case 'gte':
+                $query->where($field, '>=', (float)$value);
+                break;
+            case 'lte':
+                $query->where($field, '<=', (float)$value);
+                break;
+            case 'gt':
+                $query->where($field, '>', (float)$value);
+                break;
+            case 'lt':
+                $query->where($field, '<', (float)$value);
+                break;
+            default:
+                $query->where($field, $value);
+        }
+    }
 
+    protected function applyActiveFiltersToQuery($query, string $productColumn, array $filters, array $filterConfig = [])
+    {
+        $attributeMap = Attribute::whereIn('code', array_keys($filters))->get()->keyBy('code');
+
+        foreach ($filters as $code => $value) {
+            $attr = $attributeMap->get($code);
+            if (!$attr || ($value === '' && $value !== '0')) continue;
+
+            $config   = $filterConfig[$code] ?? [];
+            $operator = $config['filter']['operator'] ?? $this->defaultOperator($attr->field_type);
+            $field    = $config['filter']['field']    ?? $this->defaultField($attr->field_type);
+
+            $query->where(function ($q) use ($attr, $value, $operator, $field, $productColumn) {
+                $q->whereExists(function ($subQ) use ($attr, $value, $operator, $field, $productColumn) {
+                    $subQ->select(DB::raw(1))
+                        ->from('product_attributes')
+                        ->whereColumn('product_attributes.product_id', $productColumn)
+                        ->where('product_attributes.attribute_id', $attr->id);
+                    $this->applyFilterCondition($subQ, 'product_attributes.' . $field, $operator, $value);
+                })
+                    ->orWhereExists(function ($subQ) use ($attr, $value, $operator, $field, $productColumn) {
+                        $subQ->select(DB::raw(1))
+                            ->from('variant_attribute_values as vav_f')
+                            ->join('product_variants as pv_f', 'pv_f.id', '=', 'vav_f.variant_id')
+                            ->whereColumn('pv_f.product_id', $productColumn)
+                            ->where('pv_f.active', 1)
+                            ->where('vav_f.attribute_id', $attr->id);
+                        $this->applyFilterCondition($subQ, 'vav_f.' . $field, $operator, $value);
+                    });
+            });
+        }
+    }
+
+    public function getAttributesForCatalog(int $catalogId, int $depth = 0): array
+    {
+        $cacheKey = "filter_attributes_{$catalogId}_{$depth}";
+
+        return Cache::remember($cacheKey, $this->cacheTtl, function () use ($catalogId, $depth) {
+            $categoryIds = [$catalogId];
             if ($depth > 0) {
                 $categoryIds = DB::table('site_content_closure')
                     ->where('ancestor', $catalogId)
@@ -29,83 +102,31 @@ class ProductFilterService
                     ->pluck('descendant')
                     ->toArray();
                 $categoryIds[] = $catalogId;
-                $q->whereIn('parent', $categoryIds);
-            } else {
-                $q->where('parent', $catalogId);
             }
 
-            $q->whereIn('id', function ($sq) {
-                $sq->select('product_id')->from('product_variants')->where('active', 1);
-            });
-        };
-    }
+            $variantAttrIds = DB::table('product_variant_attributes as pva')
+                ->join('site_content as sc', 'sc.id', '=', 'pva.product_id')
+                ->where('sc.published', 1)->where('sc.deleted', 0)
+                ->whereIn('sc.parent', $categoryIds)
+                ->pluck('pva.attribute_id')->unique()->toArray();
 
-    public function getFilterStateLight(array $allAttributes, array $activeFilters = []): array
-    {
-        $filterStateLight = [];
+            $productAttrIds = DB::table('product_attributes as pa')
+                ->join('site_content as sc', 'sc.id', '=', 'pa.product_id')
+                ->where('sc.published', 1)->where('sc.deleted', 0)
+                ->whereIn('sc.parent', $categoryIds)
+                ->pluck('pa.attribute_id')->unique()->toArray();
 
-        foreach ($allAttributes as $attribute) {
-            $attrCode = $attribute['code'];
-            $displayType = $attribute['field_type'];
-            $displayOptions = $attribute['options'] ?? [];
-
-            $values = [];
-            if (in_array($displayType, ['select', 'dropdown', 'listbox', 'listbox-multiple', 'checkbox', 'option'])) {
-                foreach ($displayOptions as $opt) {
-                    $values[] = [
-                        'value'     => $opt,
-                        'count'     => 0,
-                        'available' => true,
-                    ];
-                }
-            }
-
-            $item = [
-                'id'            => $attribute['id'],
-                'code'          => $attrCode,
-                'name'          => $attribute['name'],
-                'type'          => $displayType,
-                'options'       => $displayOptions,
-                'values'        => $values,
-                'min'           => null,
-                'max'           => null,
-                'current_min'   => $activeFilters[$attrCode]['min'] ?? null,
-                'current_max'   => $activeFilters[$attrCode]['max'] ?? null,
-                'current_value' => is_array($activeFilters[$attrCode] ?? null) ? null : ($activeFilters[$attrCode] ?? null),
-                'filter'        => [
-                    'operator' => $this->defaultOperator($displayType),
-                    'field'    => $this->defaultField($displayType),
-                ],
-            ];
-
-            $filterStateLight[] = $item;
-        }
-
-        return $filterStateLight;
-    }
-
-    public function getAttributesForCatalog(int $catalogId, int $depth = 0): array
-    {
-        $cacheKey = "filter_attributes_{$catalogId}_{$depth}";
-
-        return Cache::remember($cacheKey, $this->cacheTtl, function () use ($catalogId, $depth) {
-            $productIdsSubQuery = $this->getProductIdsInCatalog($catalogId, $depth);
-
-            $attributeIds = ProductVariantAttribute::whereIn('product_id', $productIdsSubQuery)
-                ->pluck('attribute_id')->unique()->toArray();
+            $attributeIds = array_unique(array_merge($variantAttrIds, $productAttrIds));
 
             return Attribute::whereIn('id', $attributeIds)
                 ->whereNotIn('field_type', ['custom_tv:multitv'])
-                ->get()
-                ->toArray();
+                ->get()->toArray();
         });
     }
 
     public function defaultOperator(string $fieldType): string
     {
-        return in_array($fieldType, ['select', 'dropdown', 'listbox', 'listbox-multiple', 'checkbox', 'option'])
-            ? 'in'
-            : 'like';
+        return in_array($fieldType, ['select', 'dropdown', 'listbox', 'listbox-multiple', 'checkbox', 'option']) ? 'in' : 'like';
     }
 
     public function defaultField(string $fieldType): string
@@ -113,159 +134,107 @@ class ProductFilterService
         return $fieldType === 'number' ? 'value_numeric' : 'value';
     }
 
-    protected function filterProductIdsByAttributes(
-        $productIds,
-        array $filters,
-        array $filterConfig = []
-    ): array {
-        if (empty($filters)) {
-            return ProductVariant::whereIn('product_id', $productIds)
-                ->where('active', 1)
-                ->pluck('id')
-                ->toArray();
-        }
-
-        $attributeMap = Attribute::whereIn('code', array_keys($filters))->get()->keyBy('code');
-
-        $query = ProductVariant::whereIn('product_id', $productIds)
-            ->where('active', 1)
-            ->select('product_variants.id');
-
-        $joinCount = 0;
-        foreach ($filters as $code => $value) {
-            $attr = $attributeMap->get($code);
-            if (!$attr || ($value === '' && $value !== '0')) {
-                continue;
-            }
-
-            $config   = $filterConfig[$code] ?? [];
-            $operator = $config['filter']['operator'] ?? $this->defaultOperator($attr->field_type);
-            $field    = $config['filter']['field']    ?? $this->defaultField($attr->field_type);
-
-            $joinCount++;
-            $alias = 'vav_f' . $joinCount;
-
-            $query->join("variant_attribute_values as {$alias}", function ($join) use ($attr, $value, $alias, $operator, $field) {
-                $join->on('product_variants.id', '=', "{$alias}.variant_id")
-                    ->where("{$alias}.attribute_id", $attr->id);
-
-                switch ($operator) {
-                    case 'eq':
-                        $join->where("{$alias}.{$field}", $value);
-                        break;
-                    case 'neq':
-                        $join->where("{$alias}.{$field}", '!=', $value);
-                        break;
-                    case 'like':
-                        $join->where("{$alias}.{$field}", 'LIKE', '%' . $value . '%');
-                        break;
-                    case 'between':
-                        if (is_array($value)) {
-                            if (isset($value['min']) && $value['min'] !== '') {
-                                $join->where("{$alias}.{$field}", '>=', (float)$value['min']);
-                            }
-                            if (isset($value['max']) && $value['max'] !== '') {
-                                $join->where("{$alias}.{$field}", '<=', (float)$value['max']);
-                            }
-                        }
-                        break;
-                    case 'in':
-                        $join->whereIn("{$alias}.{$field}", (array)$value);
-                        break;
-                    case 'notin':
-                        $join->whereNotIn("{$alias}.{$field}", (array)$value);
-                        break;
-                    case 'gte':
-                        $join->where("{$alias}.{$field}", '>=', (float)$value);
-                        break;
-                    case 'lte':
-                        $join->where("{$alias}.{$field}", '<=', (float)$value);
-                        break;
-                    case 'gt':
-                        $join->where("{$alias}.{$field}", '>', (float)$value);
-                        break;
-                    case 'lt':
-                        $join->where("{$alias}.{$field}", '<', (float)$value);
-                        break;
-                    default:
-                        $join->where("{$alias}.{$field}", $value);
+    public function getFilterStateLight(array $allAttributes, array $activeFilters = []): array
+    {
+        $filterStateLight = [];
+        foreach ($allAttributes as $attribute) {
+            $attrCode = $attribute['code'];
+            $displayType = $attribute['field_type'];
+            $displayOptions = $attribute['options'] ?? [];
+            $values = [];
+            if (in_array($displayType, ['select', 'dropdown', 'listbox', 'listbox-multiple', 'checkbox', 'option'])) {
+                foreach ($displayOptions as $opt) {
+                    $values[] = ['value' => $opt, 'count' => 0, 'available' => true];
                 }
-            });
+            }
+            $filterStateLight[] = [
+                'id' => $attribute['id'],
+                'code' => $attrCode,
+                'name' => $attribute['name'],
+                'type' => $displayType,
+                'options' => $displayOptions,
+                'values' => $values,
+                'min' => null,
+                'max' => null,
+                'current_min' => $activeFilters[$attrCode]['min'] ?? null,
+                'current_max' => $activeFilters[$attrCode]['max'] ?? null,
+                'current_value' => is_array($activeFilters[$attrCode] ?? null) ? null : ($activeFilters[$attrCode] ?? null),
+                'filter' => ['operator' => $this->defaultOperator($displayType), 'field' => $this->defaultField($displayType)]
+            ];
         }
-
-        if ($joinCount === 0) {
-            return [];
-        }
-
-        return $query->pluck('id')->toArray();
+        return $filterStateLight;
     }
 
     public function getFilteredProductsWithAttributes(
-        int    $catalogId,
-        array  $filters = [],
-        int    $perPage = 12,
+        int $catalogId,
+        array $filters = [],
+        int $perPage = 12,
         string $sort = 'menuindex:asc',
-        array  $withAttributes = [],
-        ?int   $page = null,
-        array  $filterConfig = [],
-        int    $depth = 0
+        array $withAttributes = [],
+        ?int $page = null,
+        array $filterConfig = [],
+        int $depth = 0
     ): LengthAwarePaginator {
-        $productIdsSubQuery = $this->getProductIdsInCatalog($catalogId, $depth);
-        $variantMap = [];
+        $prefix = DB::getTablePrefix();
+        $query = SiteContent::query()->where('published', 1)->where('deleted', 0);
 
-        if (!empty($filters)) {
-            $variantIds = $this->filterProductIdsByAttributes($productIdsSubQuery, $filters, $filterConfig);
-
-            if (empty($variantIds)) {
-                return new LengthAwarePaginator([], 0, $perPage);
-            }
-
-            $productIdsSubQuery = function ($q) use ($variantIds) {
-                $q->select('product_id')->from('product_variants')->whereIn('id', $variantIds);
-            };
-            $variantMap = $variantIds;
+        $categoryIds = [$catalogId];
+        if ($depth > 0) {
+            $categoryIds = DB::table('site_content_closure')
+                ->where('ancestor', $catalogId)->where('depth', '>', 0)->where('depth', '<=', $depth)
+                ->pluck('descendant')->toArray();
+            $categoryIds[] = $catalogId;
         }
+        $query->whereIn('parent', $categoryIds);
 
-        $query = SiteContent::whereIn('id', $productIdsSubQuery)
-            ->where('published', 1)
-            ->where('deleted', 0);
+        $query->where(function ($q) {
+            $q->whereExists(function ($subQ) {
+                $subQ->select(DB::raw(1))->from('product_variants')
+                    ->whereColumn('product_variants.product_id', 'site_content.id')
+                    ->where('product_variants.active', 1);
+            })->orWhereExists(function ($subQ) {
+                $subQ->select(DB::raw(1))->from('product_attributes')
+                    ->whereColumn('product_attributes.product_id', 'site_content.id');
+            });
+        });
+
+        $this->applyActiveFiltersToQuery($query, 'site_content.id', $filters, $filterConfig);
 
         $parts = explode(':', $sort);
         $sortField = $parts[0] ?: 'menuindex';
-        $sortDir   = strtolower($parts[1] ?? 'asc');
-        if (!in_array($sortDir, ['asc', 'desc'])) {
-            $sortDir = 'asc';
-        }
+        $sortDir = strtolower($parts[1] ?? 'asc');
+        if (!in_array($sortDir, ['asc', 'desc'])) $sortDir = 'asc';
 
-        $allowedSortFields = ['menuindex', 'pagetitle', 'published_at'];
-        if (in_array($sortField, $allowedSortFields)) {
+        if (in_array($sortField, ['menuindex', 'pagetitle', 'published_at'])) {
             $query->orderBy($sortField, $sortDir);
         } else {
             $attribute = Attribute::where('code', $sortField)->first();
             if ($attribute) {
-                $query->leftJoin('product_variants as sort_pv', 'site_content.id', '=', 'sort_pv.product_id')
-                    ->leftJoin('variant_attribute_values as sort_vav', function ($join) use ($attribute) {
-                        $join->on('sort_pv.id', '=', 'sort_vav.variant_id')
-                            ->where('sort_vav.attribute_id', $attribute->id);
-                    })
-                    ->where('sort_pv.active', 1)
-                    ->groupBy('site_content.id');
-
-                if ($attribute->field_type === 'number') {
-                    $query->orderByRaw("MIN(sort_vav.value_numeric) {$sortDir}");
-                } else {
-                    $query->orderByRaw("MAX(sort_vav.value) {$sortDir}");
-                }
+                $attrId = $attribute->id;
+                $isNumeric = $attribute->field_type === 'number';
+                $aggFunc = $isNumeric ? 'MIN' : 'MAX';
+                $valueField = $isNumeric ? 'value_numeric' : 'value';
+                $query->orderByRaw("(
+                    SELECT COALESCE(
+                        (SELECT {$aggFunc}(vav.{$valueField}) FROM {$prefix}variant_attribute_values vav 
+                         JOIN {$prefix}product_variants pv ON pv.id = vav.variant_id 
+                         WHERE pv.product_id = site_content.id AND pv.active = 1 AND vav.attribute_id = {$attrId}),
+                        (SELECT {$aggFunc}(pa.{$valueField}) FROM {$prefix}product_attributes pa 
+                         WHERE pa.product_id = site_content.id AND pa.attribute_id = {$attrId})
+                    )
+                ) {$sortDir}");
             } else {
                 $query->orderBy('menuindex', $sortDir);
             }
         }
 
         $page = $page ?: (request()->get('page', 1));
+        \Log::info('FILTER SQL: ' . $query->toSql());
+        \Log::info('FILTER BINDINGS: ' . json_encode($query->getBindings()));
         $paginator = $query->paginate($perPage, ['site_content.*'], 'page', $page);
 
         $productIdsOnPage = $paginator->getCollection()->pluck('id')->toArray();
-        $attributesData   = $this->loadAttributesForProducts($productIdsOnPage, $withAttributes, $variantMap);
+        $attributesData = $this->loadAttributesForProducts($productIdsOnPage, $withAttributes);
 
         $paginator->getCollection()->transform(function ($product) use ($attributesData) {
             $product->attrs = (object) ($attributesData[$product->id] ?? []);
@@ -275,230 +244,154 @@ class ProductFilterService
         return $paginator;
     }
 
-    protected function loadAttributesForProducts(array $productIds, array $attrCodes, array $variantMap = []): array
+    protected function loadAttributesForProducts(array $productIds, array $attrCodes): array
     {
-        if (empty($productIds) || empty($attrCodes)) {
-            return array_fill_keys($productIds, []);
-        }
+        if (empty($productIds) || empty($attrCodes)) return array_fill_keys($productIds, []);
 
-        if (!empty($variantMap)) {
-            $jsonValues = ProductVariant::whereIn('id', $variantMap)
-                ->pluck('attrs_json', 'product_id');
-        } else {
-            $sub = ProductVariant::whereIn('product_id', $productIds)
-                ->where('active', 1)
-                ->groupBy('product_id')
-                ->select('product_id', DB::raw('MIN(id) as first_id'));
+        $variants = ProductVariant::whereIn('product_id', $productIds)->where('active', 1)
+            ->orderBy('sort')->get(['id', 'product_id', 'attrs_json'])
+            ->groupBy('product_id')->map(fn($items) => $items->first());
 
-            $variantIds = DB::table(DB::raw("({$sub->toSql()}) as sub"))
-                ->mergeBindings($sub->getQuery())
-                ->pluck('first_id');
-
-            $jsonValues = ProductVariant::whereIn('id', $variantIds)
-                ->pluck('attrs_json', 'product_id');
-        }
+        $directAttrs = DB::table('product_attributes')
+            ->join('attributes', 'attributes.id', '=', 'product_attributes.attribute_id')
+            ->whereIn('product_attributes.product_id', $productIds)
+            ->whereIn('attributes.code', $attrCodes)
+            ->select('product_attributes.product_id', 'attributes.code', 'product_attributes.value')
+            ->get()->groupBy('product_id');
 
         $result = array_fill_keys($productIds, []);
-
-        foreach ($jsonValues as $productId => $json) {
-            $attrs = json_decode($json, true);
-            if (!is_array($attrs)) continue;
-
-            $filtered = [];
-            foreach ($attrCodes as $code) {
-                if (array_key_exists($code, $attrs)) {
-                    $filtered[$code] = $attrs[$code];
-                }
+        foreach ($productIds as $pid) {
+            $variantAttrs = isset($variants[$pid]) && $variants[$pid]->attrs_json ? (json_decode($variants[$pid]->attrs_json, true) ?? []) : [];
+            $directAttrsArr = [];
+            if (isset($directAttrs[$pid])) {
+                foreach ($directAttrs[$pid] as $row) $directAttrsArr[$row->code] = $row->value;
             }
-            $result[$productId] = $filtered;
+            $result[$pid] = array_merge($directAttrsArr, $variantAttrs);
         }
-
         return $result;
     }
 
-    public function getFilterState(
-        int   $catalogId,
-        array $activeFilters = [],
-        array $filterConfig = [],
-        int   $depth = 0
-    ): array {
+    public function getFilterState(int $catalogId, array $activeFilters = [], array $filterConfig = [], int $depth = 0): array
+    {
         $cacheKey = "filter_state_{$catalogId}_" . md5(serialize($activeFilters) . serialize($filterConfig) . $depth);
-
         $this->storeCacheKeyForCategory($catalogId, $cacheKey);
 
         return Cache::remember($cacheKey, $this->cacheTtl, function () use ($catalogId, $activeFilters, $filterConfig, $depth) {
-            $productIdsSubQuery = $this->getProductIdsInCatalog($catalogId, $depth);
-
             $allAttributes = $this->getAttributesForCatalog($catalogId, $depth);
             if (empty($allAttributes)) return [];
 
             $prefix = DB::getTablePrefix();
+            $attrIds = array_column($allAttributes, 'id');
+            $attrMapById = [];
+            foreach ($allAttributes as $attr) {
+                $attrMapById[$attr['id']] = $attr['code'];
+            }
+
+            $baseQuery = SiteContent::query()->where('published', 1)->where('deleted', 0);
+
+            $categoryIds = [$catalogId];
+            if ($depth > 0) {
+                $categoryIds = DB::table('site_content_closure')
+                    ->where('ancestor', $catalogId)->where('depth', '>', 0)->where('depth', '<=', $depth)
+                    ->pluck('descendant')->toArray();
+                $categoryIds[] = $catalogId;
+            }
+            $baseQuery->whereIn('parent', $categoryIds);
+
+            $baseQuery->where(function ($q) {
+                $q->whereExists(function ($subQ) {
+                    $subQ->select(DB::raw(1))->from('product_variants')
+                        ->whereColumn('product_variants.product_id', 'site_content.id')
+                        ->where('product_variants.active', 1);
+                })->orWhereExists(function ($subQ) {
+                    $subQ->select(DB::raw(1))->from('product_attributes')
+                        ->whereColumn('product_attributes.product_id', 'site_content.id');
+                });
+            });
+
+            $this->applyActiveFiltersToQuery($baseQuery, 'site_content.id', $activeFilters, $filterConfig);
+
+            $filteredProductIds = $baseQuery->pluck('site_content.id')->toArray();
+
+            if (empty($filteredProductIds)) return [];
+
+            $idsStr = implode(',', $filteredProductIds);
+            $attrIdsStr = implode(',', $attrIds);
+
+            $variantValsSql = "SELECT pv.product_id, vav.attribute_id, vav.value, vav.value_numeric 
+                               FROM {$prefix}variant_attribute_values vav 
+                               JOIN {$prefix}product_variants pv ON pv.id = vav.variant_id 
+                               WHERE pv.product_id IN ({$idsStr}) AND pv.active = 1 AND vav.attribute_id IN ({$attrIdsStr})";
+
+            $directValsSql = "SELECT product_id, attribute_id, value, value_numeric 
+                              FROM {$prefix}product_attributes 
+                              WHERE product_id IN ({$idsStr}) AND attribute_id IN ({$attrIdsStr})";
+
+            $variantRows = DB::select($variantValsSql);
+            $directRows = DB::select($directValsSql);
+
+            $groupedStats = [];
+            foreach ($allAttributes as $attr) {
+                $groupedStats[$attr['id']] = ['values' => [], 'min_val' => null, 'max_val' => null];
+            }
+
+            $processRow = function ($row) use (&$groupedStats) {
+                $aid = $row->attribute_id;
+                $val = $row->value !== null ? $row->value : (string)$row->value_numeric;
+                if ($val === '' && $row->value_numeric !== null) $val = (string)$row->value_numeric;
+
+                if (!isset($groupedStats[$aid]['values'][$val])) {
+                    $groupedStats[$aid]['values'][$val] = 0;
+                }
+                $groupedStats[$aid]['values'][$val]++;
+
+                if ($row->value_numeric !== null) {
+                    $numVal = (float)$row->value_numeric;
+                    if ($groupedStats[$aid]['min_val'] === null || $numVal < $groupedStats[$aid]['min_val']) {
+                        $groupedStats[$aid]['min_val'] = $numVal;
+                    }
+                    if ($groupedStats[$aid]['max_val'] === null || $numVal > $groupedStats[$aid]['max_val']) {
+                        $groupedStats[$aid]['max_val'] = $numVal;
+                    }
+                }
+            };
+
+            foreach ($variantRows as $row) $processRow($row);
+            foreach ($directRows as $row) $processRow($row);
 
             $dynamicOptions = [];
             $attrIdsNeedingOptions = [];
             foreach ($allAttributes as $attribute) {
-                $config = $filterConfig[$attribute['code']] ?? [];
-                $displayType = $config['display']['type'] ?? $attribute['field_type'];
-                $explicitOptions = $config['display']['options'] ?? $attribute['options'] ?? [];
-                if (
-                    in_array($displayType, ['select', 'dropdown', 'listbox', 'listbox-multiple', 'checkbox', 'option'])
-                    && empty($explicitOptions)
-                ) {
+                if (in_array($attribute['field_type'], ['select', 'dropdown', 'listbox', 'listbox-multiple', 'checkbox', 'option']) && empty($attribute['options'])) {
                     $attrIdsNeedingOptions[] = $attribute['id'];
                 }
             }
-
-            if (!empty($attrIdsNeedingOptions)) {
-                $optionsRaw = DB::table('variant_attribute_values as vav')
-                    ->join('product_variants as pv', 'pv.id', '=', 'vav.variant_id')
-                    ->whereIn('pv.product_id', $productIdsSubQuery)
-                    ->where('pv.active', 1)
-                    ->whereIn('vav.attribute_id', $attrIdsNeedingOptions)
-                    ->select('vav.attribute_id', 'vav.value')
-                    ->distinct()
-                    ->get()
-                    ->groupBy('attribute_id')
-                    ->map(fn($items) => $items->pluck('value')->unique()->sort()->values()->toArray());
-                $dynamicOptions = $optionsRaw->toArray();
-            }
-
-            $statsQuery = DB::table('variant_attribute_values as vav_stats')
-                ->join('product_variants as pv', 'pv.id', '=', 'vav_stats.variant_id')
-                ->whereIn('pv.product_id', $productIdsSubQuery)
-                ->where('pv.active', 1)
-                ->whereIn('vav_stats.attribute_id', array_column($allAttributes, 'id'));
-
-            $hasActiveFilters = !empty($activeFilters);
-            $whereClauses = [];
-
-            if ($hasActiveFilters) {
-                $attributeMap = Attribute::whereIn('code', array_keys($activeFilters))->get()->keyBy('code');
-                $joinCount = 0;
-
-                foreach ($activeFilters as $code => $value) {
-                    $attr = $attributeMap->get($code);
-                    if (!$attr || ($value === '' && $value !== '0')) continue;
-
-                    $config   = $filterConfig[$code] ?? [];
-                    $operator = $config['filter']['operator'] ?? $this->defaultOperator($attr->field_type);
-                    $field    = $config['filter']['field']    ?? $this->defaultField($attr->field_type);
-
-                    $joinCount++;
-                    $alias = "vav_f{$joinCount}";
-                    $attrId = $attr->id;
-
-                    $statsQuery->leftJoin("variant_attribute_values as {$alias}", function ($join) use ($attrId, $value, $alias, $operator, $field) {
-                        $join->on('pv.id', '=', "{$alias}.variant_id")
-                            ->where("{$alias}.attribute_id", $attrId);
-
-                        switch ($operator) {
-                            case 'eq':
-                                $join->where("{$alias}.{$field}", $value);
-                                break;
-                            case 'neq':
-                                break;
-                            case 'like':
-                                $join->where("{$alias}.{$field}", 'LIKE', '%' . $value . '%');
-                                break;
-                            case 'between':
-                                if (is_array($value)) {
-                                    if (isset($value['min']) && $value['min'] !== '') $join->where("{$alias}.{$field}", '>=', (float)$value['min']);
-                                    if (isset($value['max']) && $value['max'] !== '') $join->where("{$alias}.{$field}", '<=', (float)$value['max']);
-                                }
-                                break;
-                            case 'in':
-                                $join->whereIn("{$alias}.{$field}", (array)$value);
-                                break;
-                            case 'notin':
-                                break;
-                            case 'gte':
-                                $join->where("{$alias}.{$field}", '>=', (float)$value);
-                                break;
-                            case 'lte':
-                                $join->where("{$alias}.{$field}", '<=', (float)$value);
-                                break;
-                            case 'gt':
-                                $join->where("{$alias}.{$field}", '>', (float)$value);
-                                break;
-                            case 'lt':
-                                $join->where("{$alias}.{$field}", '<', (float)$value);
-                                break;
-                            default:
-                                $join->where("{$alias}.{$field}", $value);
-                        }
-                    });
-
-                    if (in_array($operator, ['notin', 'neq'])) {
-                        $whereClauses[] = "(`{$prefix}vav_stats`.`attribute_id` = {$attrId} OR `{$prefix}{$alias}`.`variant_id` IS NULL)";
-                    } else {
-                        $whereClauses[] = "(`{$prefix}vav_stats`.`attribute_id` = {$attrId} OR `{$prefix}{$alias}`.`variant_id` IS NOT NULL)";
-                    }
+            foreach ($groupedStats as $aid => $data) {
+                if (in_array($aid, $attrIdsNeedingOptions)) {
+                    $dynamicOptions[$aid] = array_keys($data['values']);
                 }
-
-                if (!empty($whereClauses)) {
-                    $statsQuery->whereRaw(implode(' AND ', $whereClauses));
-                }
-            }
-
-            $statsQuery->select(
-                'vav_stats.attribute_id',
-                'vav_stats.value',
-                DB::raw("COUNT(DISTINCT {$prefix}pv.product_id) as product_count"),
-                DB::raw("MIN(CAST({$prefix}vav_stats.value_numeric AS DECIMAL(14,2))) as min_val"),
-                DB::raw("MAX(CAST({$prefix}vav_stats.value_numeric AS DECIMAL(14,2))) as max_val")
-            )
-                ->groupBy('vav_stats.attribute_id', 'vav_stats.value');
-
-            $rawStats = $statsQuery->get();
-
-            $groupedStats = [];
-            foreach ($rawStats as $row) {
-                $aid = $row->attribute_id;
-                if (!isset($groupedStats[$aid])) {
-                    $groupedStats[$aid] = ['values' => [], 'min_val' => null, 'max_val' => null];
-                }
-                $groupedStats[$aid]['values'][$row->value] = $row->product_count;
-                if ($row->min_val !== null) $groupedStats[$aid]['min_val'] = $row->min_val;
-                if ($row->max_val !== null) $groupedStats[$aid]['max_val'] = $row->max_val;
             }
 
             $result = [];
             foreach ($allAttributes as $attribute) {
-                $attrId   = $attribute['id'];
                 $attrCode = $attribute['code'];
-                $config   = $filterConfig[$attrCode] ?? [];
-
-                $displayType    = $config['display']['type']    ?? $attribute['field_type'];
-                $displayOptions = $config['display']['options'] ?? $attribute['options'] ?? [];
-                if (empty($displayOptions) && in_array($displayType, ['select', 'dropdown', 'listbox', 'listbox-multiple', 'checkbox', 'option'])) {
-                    $displayOptions = $dynamicOptions[$attrId] ?? [];
-                }
-
-                $filterOperator = $config['filter']['operator'] ?? $this->defaultOperator($attribute['field_type']);
-                $filterField    = $config['filter']['field']    ?? $this->defaultField($attribute['field_type']);
-                $aggregate      = $config['aggregate'] ?? 'count';
-
+                $displayType = $attribute['field_type'];
+                $displayOptions = $attribute['options'] ?? ($dynamicOptions[$attribute['id']] ?? []);
                 $item = [
-                    'id'        => $attrId,
-                    'code'      => $attrCode,
-                    'name'      => $attribute['name'],
-                    'type'      => $displayType,
-                    'options'   => $displayOptions,
-                    'filter'    => ['operator' => $filterOperator, 'field' => $filterField],
-                    'aggregate' => $aggregate,
+                    'id' => $attribute['id'],
+                    'code' => $attrCode,
+                    'name' => $attribute['name'],
+                    'type' => $displayType,
+                    'options' => $displayOptions,
+                    'filter' => ['operator' => $this->defaultOperator($displayType), 'field' => $this->defaultField($displayType)]
                 ];
-
-                $stats = $groupedStats[$attrId] ?? ['values' => [], 'min_val' => null, 'max_val' => null];
+                $stats = $groupedStats[$attribute['id']] ?? ['values' => [], 'min_val' => null, 'max_val' => null];
 
                 if (in_array($displayType, ['select', 'dropdown', 'listbox', 'listbox-multiple', 'checkbox', 'option'])) {
                     $values = [];
-                    foreach ($item['options'] as $optionValue) {
-                        $cnt = $stats['values'][$optionValue] ?? 0;
-                        $values[] = [
-                            'value'     => $optionValue,
-                            'count'     => $cnt,
-                            'available' => $cnt > 0,
-                        ];
+                    foreach ($item['options'] as $opt) {
+                        $cnt = $stats['values'][$opt] ?? 0;
+                        $values[] = ['value' => $opt, 'count' => $cnt, 'available' => $cnt > 0];
                     }
                     $item['values'] = $values;
                 } elseif (in_array($displayType, ['number', 'range'])) {
@@ -507,85 +400,21 @@ class ProductFilterService
                     $item['current_min'] = $activeFilters[$attrCode]['min'] ?? null;
                     $item['current_max'] = $activeFilters[$attrCode]['max'] ?? null;
                 }
-
                 $result[] = $item;
             }
-
             return $result;
         });
     }
 
-    public function getFilteredProducts(
-        int    $catalogId,
-        array  $filters,
-        int    $perPage = 12,
-        string $sort = 'menuindex:asc',
-        ?int   $page = null,
-        array  $filterConfig = [],
-        int    $depth = 0
-    ): LengthAwarePaginator {
-        $productIdsSubQuery = $this->getProductIdsInCatalog($catalogId, $depth);
-
-        if (!empty($filters)) {
-            $variantIds = $this->filterProductIdsByAttributes($productIdsSubQuery, $filters, $filterConfig);
-
-            if (empty($variantIds)) {
-                return new LengthAwarePaginator([], 0, $perPage);
-            }
-
-            $productIdsSubQuery = function ($q) use ($variantIds) {
-                $q->select('product_id')->from('product_variants')->whereIn('id', $variantIds);
-            };
-        }
-
-        $query = SiteContent::whereIn('id', $productIdsSubQuery)
-            ->where('published', 1)
-            ->where('deleted', 0);
-
-        $parts = explode(':', $sort);
-        $sortField = $parts[0] ?: 'menuindex';
-        $sortDir   = strtolower($parts[1] ?? 'asc');
-        if (!in_array($sortDir, ['asc', 'desc'])) {
-            $sortDir = 'asc';
-        }
-
-        $allowedSortFields = ['menuindex', 'pagetitle', 'published_at'];
-        if (in_array($sortField, $allowedSortFields)) {
-            $query->orderBy($sortField, $sortDir);
-        } else {
-            $attribute = Attribute::where('code', $sortField)->first();
-            if ($attribute) {
-                $query->leftJoin('product_variants as sort_pv', 'site_content.id', '=', 'sort_pv.product_id')
-                    ->leftJoin('variant_attribute_values as sort_vav', function ($join) use ($attribute) {
-                        $join->on('sort_pv.id', '=', 'sort_vav.variant_id')
-                            ->where('sort_vav.attribute_id', $attribute->id);
-                    })
-                    ->where('sort_pv.active', 1)
-                    ->groupBy('site_content.id');
-
-                if ($attribute->field_type === 'number') {
-                    $query->orderByRaw("MIN(sort_vav.value_numeric) {$sortDir}");
-                } else {
-                    $query->orderByRaw("MAX(sort_vav.value) {$sortDir}");
-                }
-            } else {
-                $query->orderBy('menuindex', $sortDir);
-            }
-        }
-
-        $page = $page ?: (request()->get('page', 1));
-        return $query->paginate($perPage, ['site_content.*'], 'page', $page);
-    }
-
     public function getCachedFilteredProducts(
-        int    $catalogId,
-        array  $filters,
-        int    $perPage = 12,
+        int $catalogId,
+        array $filters,
+        int $perPage = 12,
         string $sort = 'menuindex:asc',
-        array  $withAttributes = [],
-        ?int   $page = null,
-        array  $filterConfig = [],
-        int    $depth = 0
+        array $withAttributes = [],
+        ?int $page = null,
+        array $filterConfig = [],
+        int $depth = 0
     ): LengthAwarePaginator {
         $cacheKey = 'filter_results_' . $catalogId . '_' .
             md5(serialize($filters) . $perPage . $sort . implode(',', $withAttributes) . ($page ?? 1) . serialize($filterConfig) . $depth);
@@ -601,7 +430,6 @@ class ProductFilterService
     {
         $registryKey = "filter_keys_registry_{$catalogId}";
         $keys = Cache::get($registryKey, []);
-
         if (!in_array($key, $keys)) {
             $keys[] = $key;
             Cache::put($registryKey, $keys, $this->cacheTtl + 60);
@@ -612,11 +440,7 @@ class ProductFilterService
     {
         $registryKey = "filter_keys_registry_{$catalogId}";
         $keys = Cache::get($registryKey, []);
-
-        foreach ($keys as $key) {
-            Cache::forget($key);
-        }
-
+        foreach ($keys as $key) Cache::forget($key);
         Cache::forget($registryKey);
     }
 }
