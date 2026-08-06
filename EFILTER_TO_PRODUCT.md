@@ -4,6 +4,8 @@
 
 Раньше контроллер делегировал работу абстрактному `FilterServiceInterface` и возвращал готовый HTML. Теперь мы используем фасад `ProductFilter` и передаем в шаблон только данные (массивы/объекты).
 
+Внимание: мы используем метод `getCachedFilteredProducts`, чтобы тяжелые запросы фильтрации кэшировались на 1 час.
+
 Замените содержимое вашего `CatalogController.php` на следующее:
 
 ```php
@@ -32,8 +34,8 @@ class CatalogController extends BaseController
         // 3. Формируем состояние фильтров для первоначального рендера
         $filterState = ProductFilter::getFilterStateLight($allAttributes, $activeFilters);
 
-        // 4. Получаем товары с учетом URL-фильтров
-        $productsPaginator = ProductFilter::getFilteredProductsWithAttributes(
+        // 4. Получаем товары с кэшированием (чтобы не нагружать БД при каждом клике)
+        $productsPaginator = ProductFilter::getCachedFilteredProducts(
             $catalogId,
             $activeFilters,
             12, // Товаров на страницу
@@ -175,7 +177,6 @@ class CatalogController extends BaseController
     </div>
 
     <!-- Шаблон для AJAX-рендеринга карточки (API-FIRST подход) -->
-    <!-- Браузер не отображает этот тег, но JS может его клонировать при фильтрации -->
     <template id="product-card-template">
         <a href="#" title="" style="text-decoration: none">
             <div class="product-card">
@@ -204,7 +205,6 @@ class CatalogController extends BaseController
             const filterStateUrl = `/catalog/${catalogId}/filter-state`;
             const filterUrl = `/catalog/${catalogId}/filter`;
 
-            // Утилиты для сбора формы
             function getCurrentFilters() {
                 const formData = new FormData(filterForm);
                 const filters = {};
@@ -235,7 +235,6 @@ class CatalogController extends BaseController
                 return cleaned;
             }
 
-            // Обновление счетчиков в форме
             function updateFilterForm(filterState) {
                 filterState.forEach(attr => {
                     const section = document.querySelector(`.filter-section[data-code="${attr.code}"]`);
@@ -276,7 +275,6 @@ class CatalogController extends BaseController
                 } catch (error) { console.error('Ошибка filter-state:', error); }
             }
 
-            // Рендер товаров из <template> по данным JSON
             function renderProducts(items) {
                 const template = document.getElementById('product-card-template');
                 productsGrid.innerHTML = '';
@@ -366,7 +364,6 @@ class CatalogController extends BaseController
                     });
             });
 
-            // Первичная загрузка счетчиков
             refreshFilterState();
         })();
     </script>
@@ -382,7 +379,7 @@ class CatalogController extends BaseController
 ```blade
 @php
     // Безопасно извлекаем данные из объекта товара
-    $attrs = (array) $item->attrs ?? [];
+    $attrs = (array) ($item->attrs ?? []);
     
     // Если цена или теги хранятся как атрибуты, достаем их из JSON
     $price = $attrs['price'] ?? null;
