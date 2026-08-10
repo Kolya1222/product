@@ -229,8 +229,6 @@ class ProductFilterService
         }
 
         $page = $page ?: (request()->get('page', 1));
-        \Log::info('FILTER SQL: ' . $query->toSql());
-        \Log::info('FILTER BINDINGS: ' . json_encode($query->getBindings()));
         $paginator = $query->paginate($perPage, ['site_content.*'], 'page', $page);
 
         $productIdsOnPage = $paginator->getCollection()->pluck('id')->toArray();
