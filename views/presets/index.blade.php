@@ -15,7 +15,7 @@
             <i class="fa fa-download"></i> Массовое назначение
         </a>
         <a href="{{ route('presets.module.import') }}" class="btn btn-success">
-            <i class="fa fa-upload"></i> Импорт вариантов
+            <i class="fa fa-upload"></i> Импорт каталога
         </a>
     </div>
 @endsection
