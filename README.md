@@ -1,8 +1,8 @@
 # Evolution CMS Product & Variants Package
 
-API-ориентированное решение для создания каталогов товаров с поддержкой общих характеристик, вариантов (торговых предложений) и высокопроизводительного фасетного поиска (Faceted Search) для Evolution CMS.
-
----
+API-ориентированное решение для создания каталогов товаров с поддержкой вариантов для Evolution CMS. 
+Пересборка классических TV под коммерческую составляющую. Включает в себя фильтрацию, импорт, экспорт UI и CLI.
+Основная логическая единица Атрибут (TV) разделенная на общие и вариативные.
 
 ## Установка
 
@@ -27,41 +27,74 @@ API-ориентированное решение для создания кат
 1. **Общие характеристики (`product_attributes`)** - атрибуты, принадлежащие самому товару (Бренд, Страна, Базовая цена). Выводятся отдельным блоком в админ-панели и участвуют в фильтрации наравне с вариантами.
 2. **Вариации (`product_variants`)** - торговые предложения (Цвет, Размер). У каждого варианта свой набор значений, которые хранятся в EAV и кэшируются в JSON-поле `attrs_json`.
 
-### Кастомная конфигурация фильтров (Filter Config)
+### Вывод каталога и фильтрация
 
-В 95% случаев сервис работает без конфигурации. Но если вам нужно переопределить логику (например, фильтровать текстовое поле строго по совпадению, или поменять тип отображения), передайте `$filterConfig`:
+Для вывода товаров и формы фильтрации на сайте, используйте фасад ProductFilter. Рекомендуется использовать метод getCachedFilteredProducts, чтобы тяжелые запросы кэшировались.
 
 ```php
-$filterConfig = [
-    'price' => [
-        'display' => ['type' => 'number'],
-        'filter'  => ['operator' => 'between', 'field' => 'value_numeric'],
-    ],
-    'brand' => [
-        'display' => ['type' => 'select'],
-        'filter'  => ['operator' => 'eq', 'field' => 'value'], // Точное совпадение вместо LIKE
-    ],
-    'weight' => [
-        'filter' => ['operator' => 'gte'] // Больше или равно
-    ]
-];
+<?php
 
-$productsPaginator = $filterService->getCachedFilteredProducts(
-    $catalogId,
-    request('filters', []),
-    12,
-    'menuindex:asc',
-    ['price', 'brand', 'weight'],
-    null,
-    $filterConfig,
-    $depth
-);
+namespace EvolutionCMS\Shop\Controllers;
+
+use EvolutionCMS\Shop\Controllers\BaseController;
+use roilafx\Product\Facades\ProductFilter;
+
+class CatalogController extends BaseController
+{  
+    public function process()
+    {
+        parent::process();
+        
+        // 1. Базовые настройки каталога
+        $catalogId = $this->id;
+        $depth = 3; // Глубина поиска в подкатегориях
+        $perPage = 6; // Товаров на страницу
+        
+        // 2. Получаем активные фильтры из URL (например, ?filters[color]=Красный)
+        $activeFilters = request('filters', []);
+        $sort = request('sort', 'menuindex:asc');
+
+        // 3. Получаем все атрибуты, доступные в этой категории
+        $allAttributes = ProductFilter::getAttributesForCatalog($catalogId, $depth);
+        
+        // 4. Собираем словарь имен атрибутов для вывода в карточках товаров
+        $attrNames = array_column($allAttributes, 'name', 'code');
+
+        // 5. Формируем состояние фильтров для первоначального рендера формы
+        $filterState = ProductFilter::getFilterStateLight($allAttributes, $activeFilters);
+
+        // 6. Получаем товары с кэшированием
+        $productsPaginator = ProductFilter::getCachedFilteredProducts(
+            $catalogId,
+            $activeFilters,
+            $perPage,
+            $sort,
+            array_column($allAttributes, 'code'),
+            null,
+            [],
+            $depth
+        );
+
+        // 7. Сохраняем параметры в ссылки пагинации (чтобы фильтры не сбрасывались при переходе на 2-ю страницу)
+        $productsPaginator->appends(request()->except('page'));
+        $productsPaginator->appends('depth', $depth);
+
+        // 8. Передаем данные в шаблон (Blade)
+        $this->addViewData([
+            'filterState' => $filterState,
+            'products'    => $productsPaginator,
+            'attrNames'   => $attrNames,
+            'catalogId'   => $catalogId,
+            'depth'       => $depth
+        ]);
+    }
+}
 ```
 
 ### Работа с вариантами товаров (ProductVariantService)
 
 ```php
-use EvolutionCMS\Product\Services\ProductVariantService;
+use roilafx\Product\Services\ProductVariantService;
 
 $variantService = app(ProductVariantService::class);
 
@@ -79,17 +112,17 @@ $variantService->updateVariant($variant, [
 ```
 *Сервис автоматически проверит, назначены ли эти атрибуты товару, сохранит значения в EAV и обновит `attrs_json`.*
 
----
 
-## CLI Инструменты
+## CLI Инструменты для старта
 
 В пакет включены Artisan-команды для тестирования производительности и обслуживания кэша:
 
+- Генерация тестовых данных (10 категорий, 14 атрибутов, 4 пресета, 5000 товаров)
 ```bash
-# Генерация тестовых данных (10 категорий, 14 атрибутов, 4 пресета, 5000 товаров)
 php artisan product:generate-test-data
-
-# Принудительный прогрев кэша фильтров для всех категорий каталога
-php artisan product:warm-cache
 ```
 
+- Принудительный прогрев кэша фильтров для всех категорий каталога
+```bash
+php artisan product:warm-cache
+```
