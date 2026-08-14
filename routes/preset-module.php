@@ -4,6 +4,7 @@ use roilafx\Product\Controllers\PresetController;
 use roilafx\Product\Controllers\ProductImportController;
 use roilafx\Product\Controllers\PresetMassAssignController;
 use roilafx\Product\Controllers\VariantController;
+use roilafx\Product\Controllers\ProductExportController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', [PresetController::class, 'index'])->name('presets.module.index');
@@ -27,6 +28,11 @@ Route::post('/import/upload-chunk', [ProductImportController::class, 'uploadChun
 Route::post('/import/finalize-upload', [ProductImportController::class, 'finalizeUpload'])->name('presets.module.import.finalize');
 Route::post('/import/read-chunk', [ProductImportController::class, 'readChunk'])->name('presets.module.import.read');
 Route::post('/import/process-chunk', [ProductImportController::class, 'processChunk'])->name('presets.module.import.process');
+
+Route::get('/export', [ProductExportController::class, 'index'])->name('presets.module.export');
+Route::post('/export/start', [ProductExportController::class, 'start'])->name('presets.module.export.start');
+Route::post('/export/process-chunk', [ProductExportController::class, 'processChunk'])->name('presets.module.export.process');
+Route::get('/export/download', [ProductExportController::class, 'download'])->name('presets.module.export.download');
 
 Route::get('variant/create', [VariantController::class, 'create'])->name('variant.create');
 Route::get('variant/{id}/edit', [VariantController::class, 'edit'])->name('variant.edit');

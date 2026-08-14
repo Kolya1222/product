@@ -102,13 +102,12 @@ class ProductImportController extends TemplateController
     }
 
     // === ФАЗА 2: ЧТЕНИЕ И ОБРАБОТКА (Smart Chunking) ===
-
     public function readChunk(Request $request)
     {
         $validator = Validator::make($request->all(), [
             'file_path' => 'required|string',
             'start_row' => 'required|integer',
-            'config_id' => 'required|exists:product_import_configs,id'
+            'config_id' => 'nullable|exists:product_import_configs,id'
         ]);
 
         if ($validator->fails()) {
@@ -121,7 +120,12 @@ class ProductImportController extends TemplateController
             return response()->json(['success' => false, 'message' => 'Файл не найден'], 404);
         }
 
-        $config = ProductImportConfig::find($request->config_id);
+        if ($request->filled('config_id')) {
+            $config = ProductImportConfig::find($request->config_id);
+            $mapping = $config->mapping;
+        } else {
+            $mapping = ['unique_key' => 'pagetitle', 'pagetitle' => 'pagetitle'];
+        }
 
         $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
         $rows = [];
@@ -132,10 +136,10 @@ class ProductImportController extends TemplateController
 
         if ($extension === 'csv') {
             $handle = fopen($filePath, 'r');
-            
+
             $firstLine = fgets($handle);
             rewind($handle);
-            
+
             $delimiter = ',';
             if (substr_count($firstLine, ';') > substr_count($firstLine, ',')) {
                 $delimiter = ';';
@@ -143,22 +147,25 @@ class ProductImportController extends TemplateController
                 $delimiter = "\t";
             }
 
-            $headers = fgetcsv($handle, 1000, $delimiter);
+            $headers = fgetcsv($handle, 0, $delimiter);
             $headers = array_map('trim', $headers);
-            
-            for ($i = 2; $i < $currentRow; $i++) { fgetcsv($handle, 1000, $delimiter); }
-            
+            if (isset($headers[0])) $headers[0] = preg_replace('/^\x{FEFF}/u', '', $headers[0]);
+
+            for ($i = 2; $i < $currentRow; $i++) {
+                fgetcsv($handle, 0, $delimiter);
+            }
+
             while ($currentRow < $maxRows) {
-                $rowData = fgetcsv($handle, 1000, $delimiter);
+                $rowData = fgetcsv($handle, 0, $delimiter);
                 if ($rowData === false) break;
-                
+
                 if (count($headers) == count($rowData)) {
                     $rows[] = array_combine($headers, $rowData);
                 }
                 $currentRow++;
             }
 
-            $rows = $this->smartChunkLookup($rows, $handle, $config->mapping, $monsterLimit, $currentRow, $delimiter);
+            $rows = $this->smartChunkLookup($rows, $handle, $mapping, $monsterLimit, $currentRow, $delimiter);
             fclose($handle);
         } else {
             $reader = IOFactory::createReaderForFile($filePath);
@@ -166,37 +173,42 @@ class ProductImportController extends TemplateController
             $spreadsheet = $reader->load($filePath);
             $sheet = $spreadsheet->getActiveSheet();
             $highestCol = $sheet->getHighestColumn(1);
-            
+
             $headers = $sheet->rangeToArray('A1:' . $highestCol . '1', null, true, false)[0];
             $headers = array_map('trim', $headers);
-            
+            if (isset($headers[0])) $headers[0] = preg_replace('/^\x{FEFF}/u', '', $headers[0]);
+
             while ($currentRow < $maxRows) {
                 $rowData = $sheet->rangeToArray('A' . $currentRow . ':' . $highestCol . $currentRow, null, true, false);
                 if (empty($rowData[0]) || empty(array_filter($rowData[0]))) break;
-                
-                if (count($headers) == count($rowData[0])) {
-                    $rows[] = array_combine($headers, $rowData[0]);
+
+                $rowValues = array_pad($rowData[0], count($headers), null);
+
+                if (count($headers) == count($rowValues)) {
+                    $rows[] = array_combine($headers, $rowValues);
                 }
                 $currentRow++;
             }
-            
+
             if (!empty($rows)) {
-                $lastKey = $this->extractUniqueKey(end($rows), $config->mapping);
+                $lastKey = $this->extractUniqueKey(end($rows), $mapping);
                 if ($lastKey) {
                     $lookAheadRow = $currentRow;
                     $countForLastKey = 1;
                     while ($countForLastKey < $monsterLimit) {
                         $nextRowData = $sheet->rangeToArray('A' . $lookAheadRow . ':' . $highestCol . $lookAheadRow, null, true, false);
                         if (empty($nextRowData[0]) || empty(array_filter($nextRowData[0]))) break;
-                        
-                        $nextAssocRow = array_combine($headers, $nextRowData[0]);
-                        $nextKey = $this->extractUniqueKey($nextAssocRow, $config->mapping);
-                        
+
+                        $nextAssocRow = array_combine($headers, array_pad($nextRowData[0], count($headers), null));
+                        $nextKey = $this->extractUniqueKey($nextAssocRow, $mapping);
+
                         if ($nextKey === $lastKey) {
                             $rows[] = $nextAssocRow;
                             $lookAheadRow++;
                             $countForLastKey++;
-                        } else { break; }
+                        } else {
+                            break;
+                        }
                     }
                     if ($countForLastKey >= $monsterLimit) {
                         $rows = array_slice($rows, 0, count($rows) - $countForLastKey);
@@ -226,7 +238,9 @@ class ProductImportController extends TemplateController
                 $rows[] = $nextRowData;
                 $currentRow++;
                 $countForLastKey++;
-            } else { break; }
+            } else {
+                break;
+            }
         }
         if ($countForLastKey >= $monsterLimit) {
             $rows = array_slice($rows, 0, count($rows) - $countForLastKey);
@@ -236,12 +250,49 @@ class ProductImportController extends TemplateController
 
     public function processChunk(Request $request)
     {
-        $rows = $request->input('rows', []);
-        $config = ProductImportConfig::find($request->input('config_id'));
-        $isTest = (bool) $request->input('test', false);
+        if ($request->filled('payload')) {
+            $rows = json_decode($request->input('payload'), true);
+        } else {
+            $rows = $request->input('rows', []);
+        }
 
-        $groupedProducts = $this->groupRows($rows, $config);
-        $stats = $this->orchestrator->processChunk($groupedProducts, $config->sync_mode, $isTest);
+        $isTest = (bool) $request->input('test', false);
+        $defaultParent = (int) $request->input('default_parent', 0);
+
+        if ($request->filled('config_id')) {
+            $config = ProductImportConfig::find($request->input('config_id'));
+            $groupedProducts = $this->groupRows($rows, $config);
+            $syncMode = $config->sync_mode;
+        } else {
+            $mappingArray = [];
+            if (!empty($rows)) {
+                $firstRow = $rows[0];
+                foreach (array_keys($firstRow) as $key) {
+                    if (!empty($key)) {
+                        $mappingArray[$key] = $key;
+                    }
+                }
+            }
+            $mappingArray['unique_key'] = 'pagetitle';
+            $mappingArray['default_parent'] = $defaultParent;
+
+            $autoConfig = new ProductImportConfig();
+            $autoConfig->mapping = $mappingArray;
+            $autoConfig->transformers = [];
+            $autoConfig->sync_mode = 'incremental';
+
+            $groupedProducts = $this->groupRows($rows, $autoConfig);
+            $syncMode = 'incremental';
+        }
+
+        if (!empty($rows) && empty($groupedProducts)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Не удалось сгруппировать товары. Проверьте, что в файле есть колонка "pagetitle".'
+            ]);
+        }
+
+        $stats = $this->orchestrator->processChunk($groupedProducts, $syncMode, $isTest);
 
         return response()->json(['success' => true, 'stats' => $stats]);
     }
@@ -306,16 +357,16 @@ class ProductImportController extends TemplateController
         $mapping = [];
         $sources = $request->input('source', []);
         $targets = $request->input('target', []);
-        
+
         foreach ($sources as $index => $source) {
             if (!empty($source) && !empty($targets[$index])) {
                 $mapping[$source] = $targets[$index];
             }
         }
-        
+
         $mapping['unique_key'] = $request->input('unique_key', 'pagetitle');
         $mapping['default_parent'] = (int) $request->input('default_parent_id', 0);
-        
+
         return $mapping;
     }
 
@@ -334,32 +385,38 @@ class ProductImportController extends TemplateController
         $grouped = [];
         $mapping = $config->mapping;
         $transformers = $config->transformers ?? [];
-        
+
         $uniqueKeyTarget = $mapping['unique_key'] ?? 'pagetitle';
         $defaultParent = $mapping['default_parent'] ?? 0;
-        
+
         $uniqueKeyAttrId = null;
         if (Str::startsWith($uniqueKeyTarget, 'general:')) {
             $code = Str::after($uniqueKeyTarget, 'general:');
             $uniqueKeyAttrId = Attribute::where('code', $code)->value('id');
         }
 
-        foreach ($rows as $row) {
-            if (empty(array_filter($row))) continue;
+        foreach ($rows as $index => $row) {
             $transformed = $this->transformer->transformRow($row, $mapping, $transformers);
-            
-            $system = []; $general = []; $variant = []; $uniqueValue = null;
+
+            $system = [];
+            $general = [];
+            $variant = [];
+            $uniqueValue = null;
 
             foreach ($transformed as $target => $value) {
                 if (in_array($target, ['pagetitle', 'parent', 'template', 'published', 'alias', 'introtext'])) {
                     $system[$target] = $value;
                 } elseif (Str::startsWith($target, 'general:')) {
                     $code = Str::after($target, 'general:');
-                    $general[$code] = $value;
+                    if ($value !== null && $value !== '') {
+                        $general[$code] = $value;
+                    }
                     if ($target === $uniqueKeyTarget) $uniqueValue = $value;
                 } elseif (Str::startsWith($target, 'variant:')) {
                     $code = Str::after($target, 'variant:');
-                    $variant[$code] = $value;
+                    if ($value !== null && $value !== '') {
+                        $variant[$code] = $value;
+                    }
                 }
             }
 
@@ -368,12 +425,14 @@ class ProductImportController extends TemplateController
             }
 
             $groupKey = $uniqueValue ?: ($system['pagetitle'] ?? null);
-            if (!$groupKey) continue;
-
             if (!isset($grouped[$groupKey])) {
                 $grouped[$groupKey] = [
-                    'system' => $system, 'general' => $general, 'variants' => [],
-                    'unique_key' => $groupKey, 'unique_key_attr_id' => $uniqueKeyAttrId, 'unique_key_value' => $uniqueValue
+                    'system' => $system,
+                    'general' => $general,
+                    'variants' => [],
+                    'unique_key' => $groupKey,
+                    'unique_key_attr_id' => $uniqueKeyAttrId,
+                    'unique_key_value' => $uniqueValue
                 ];
             } else {
                 $grouped[$groupKey]['general'] = array_merge($grouped[$groupKey]['general'], $general);

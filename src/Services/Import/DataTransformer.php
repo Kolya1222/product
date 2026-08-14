@@ -7,7 +7,7 @@ class DataTransformer
     public function transformRow(array $rawRow, array $mapping, array $transformers): array
     {
         $transformed = [];
-        
+
         foreach ($mapping as $sourceKey => $targetKey) {
             if (in_array($sourceKey, ['unique_key', 'default_parent'])) {
                 continue;
@@ -19,16 +19,23 @@ class DataTransformer
             }
 
             $value = $rawRow[$sourceKey];
-            
+
+            if (is_numeric($value) && isset($rawRow[$sourceKey])) {
+                $value = (string) $value;
+                if (strpos($value, 'E') !== false || strpos($value, 'e') !== false) {
+                    $value = number_format((float)$value, 0, '', '');
+                }
+            }
+
             if (isset($transformers[$targetKey])) {
                 foreach ($transformers[$targetKey] as $rule) {
                     $value = $this->applyTransformer($value, $rule);
                 }
             }
-            
-            $transformed[$targetKey] = $value;
+
+            $transformed[$targetKey] = is_string($value) ? trim($value) : $value;
         }
-        
+
         return $transformed;
     }
 

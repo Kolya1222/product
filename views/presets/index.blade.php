@@ -17,6 +17,9 @@
         <a href="{{ route('presets.module.import') }}" class="btn btn-success">
             <i class="fa fa-upload"></i> Импорт каталога
         </a>
+        <a href="{{ route('presets.module.export') }}" class="btn btn-info">
+            <i class="fa fa-download"></i> Экспорт каталога
+        </a>
     </div>
 @endsection
 
@@ -38,11 +41,9 @@
                         <a href="{{ route('presets.module.edit', $preset->id) }}" class="btn btn-xs btn-info">
                             <i class="fa fa-pencil"></i> Ред.
                         </a>
-                        <form action="{{ route('presets.module.destroy', $preset->id) }}" method="POST"
-                            style="display:inline;">
+                        <form action="{{ route('presets.module.destroy', $preset->id) }}" method="POST" style="display:inline;">
                             @csrf
-                            <button type="submit" class="btn btn-xs btn-danger"
-                                onclick="return confirm('Удалить пресет?')">
+                            <button type="submit" class="btn btn-xs btn-danger" onclick="return confirm('Удалить пресет?')">
                                 <i class="fa fa-trash"></i> Удалить
                             </button>
                         </form>

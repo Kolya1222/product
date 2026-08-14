@@ -5,7 +5,6 @@ namespace roilafx\Product\Services;
 use EvolutionCMS\Models\SiteContent;
 use roilafx\Product\Models\Attribute;
 use roilafx\Product\Models\ProductVariant;
-use roilafx\Product\Models\ProductVariantAttribute;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -14,6 +13,7 @@ class ProductFilterService
 {
     protected int $cacheTtl = 3600;
 
+    public static bool $disableCacheClearing = false;
     protected function applyFilterCondition($query, string $field, string $operator, $value): void
     {
         switch ($operator) {
@@ -436,6 +436,7 @@ class ProductFilterService
 
     public function clearFilterCache(int $catalogId): void
     {
+        if (self::$disableCacheClearing) return;
         $registryKey = "filter_keys_registry_{$catalogId}";
         $keys = Cache::get($registryKey, []);
         foreach ($keys as $key) Cache::forget($key);

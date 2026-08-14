@@ -575,6 +575,7 @@
                     data: data,
                     success: function () {
                         $('#generalAttrsModal').hide();
+                        self.checkAssigned();
                     },
                     error: function (xhr) {
                         alert('Ошибка сохранения: ' + (xhr.responseJSON?.message || ''));
@@ -603,14 +604,29 @@
             var self = this;
             $.get(this.urls.attributesList, { product_id: this.productId, type: 'general' }, function (data) {
                 var hasAssigned = false;
+                var valuesHtml = '<div class="row">';
+
                 data.categories.forEach(function (g) {
-                    if (g.attributes.some(a => a.assigned)) hasAssigned = true;
+                    g.attributes.forEach(function (a) {
+                        if (a.assigned) {
+                            hasAssigned = true;
+                            var displayValue = (a.value && a.value !== '') ? a.value : '<span class="text-muted">—</span>';
+                            
+                            valuesHtml += '<div class="col-md-6" style="margin-bottom: 5px; font-size: 14px; border-bottom: 1px dashed #eee; padding-bottom: 3px;">';
+                            valuesHtml += '<b style="color: #555;">' + a.name + ':</b> ' + displayValue;
+                            valuesHtml += '</div>';
+                        }
+                    });
                 });
+
+                valuesHtml += '</div>';
 
                 if (hasAssigned) {
                     $('.js-edit-general-fields-btn').show();
+                    $('#general-attrs-container').html(valuesHtml);
                 } else {
                     $('.js-edit-general-fields-btn').hide();
+                    $('#general-attrs-container').html('<p class="text-muted">Нет назначенных характеристик. Нажмите "Настроить поля".</p>');
                 }
             });
         },

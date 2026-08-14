@@ -2,11 +2,11 @@
 
 namespace roilafx\Product\Services\Import;
 
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use roilafx\Product\Facades\ProductFilter;
+use roilafx\Product\Services\ProductFilterService;
 
 class ImportOrchestrator
 {
@@ -33,17 +33,21 @@ class ImportOrchestrator
 
         $this->dictionary->loadAttributes($this->extractAttrCodes($groupedProducts));
 
-        foreach ($groupedProducts as $product) {
-            $lockKey = 'import-product-' . md5(json_encode($product['unique_key'] ?? $product['system']['pagetitle']));
-            $lock = Cache::lock($lockKey, 60);
-            
-            try {
-                $lock->block(5);
+        ProductFilterService::$disableCacheClearing = true;
 
+        $totalProducts = count($groupedProducts);
+
+        foreach ($groupedProducts as $index => $product) {
+            $startTime = microtime(true);
+
+            try {
+                // 1. Замеряем создание самого документа (товара)
+                $t1 = microtime(true);
                 $productId = $this->entityUpserter->upsertProduct($product, $this->dictionary, $dryRun);
+                $t2 = microtime(true);
+
                 if (!$productId) {
                     $stats['errors'][] = "Не удалось создать товар: " . ($product['system']['pagetitle'] ?? 'No Title');
-                    Log::error('Товар не создан (upsertProduct вернул null): ', $product['system'] ?? []);
                     continue;
                 }
 
@@ -51,23 +55,39 @@ class ImportOrchestrator
                     $affectedProductIds[] = $productId;
                 }
 
+                // 2. Замеряем сохранение общих характеристик
+                $t3 = microtime(true);
                 $this->entityUpserter->upsertGeneralAttributes($productId, $product['general'] ?? [], $this->dictionary, true, $dryRun);
+                $t4 = microtime(true);
+
+                // 3. Замеряем создание вариантов
+                $t5 = microtime(true);
                 $this->variantManager->processVariants($productId, $product['variants'] ?? [], $sessionHash, $dryRun, $this->dictionary);
+                $t6 = microtime(true);
 
                 $affectedCategories[$product['system']['parent'] ?? 0] = true;
                 $stats['updated']++;
-                
-                Log::info('Товар успешно обработан: ID ' . $productId . ' (' . ($product['system']['pagetitle'] ?? '') . ')');
+
+                // Логируем первые 5 товаров и каждый 50-й, чтобы не засорять лог
+                if ($index < 5 || $index % 50 === 0) {
+                    Log::info("ИМПОРТ ТАЙМИНГ [Товар #{$index}]: ", [
+                        'title'      => $product['system']['pagetitle'] ?? 'No Title',
+                        'doc_create' => round(($t2 - $t1) * 1000) . ' мс',
+                        'general'    => round(($t4 - $t3) * 1000) . ' мс',
+                        'variants'   => round(($t6 - $t5) * 1000) . ' мс',
+                        'total'      => round(($t6 - $startTime) * 1000) . ' мс'
+                    ]);
+                }
 
             } catch (\Exception $e) {
                 $stats['errors'][] = $e->getMessage();
                 Log::error('Исключение при обработке товара: ' . $e->getMessage(), [
                     'product' => $product['system']['pagetitle'] ?? 'Unknown',
                 ]);
-            } finally {
-                $lock->release();
             }
         }
+
+        ProductFilterService::$disableCacheClearing = false;
 
         if (!$dryRun) {
             foreach (array_keys($affectedCategories) as $catId) {
@@ -78,6 +98,8 @@ class ImportOrchestrator
         if (!$dryRun && in_array($mode, ['deactivate', 'full'])) {
             $this->finalizeSync($affectedProductIds, $sessionHash, $mode);
         }
+
+        Log::info("ИМПОРТ ЧАНКА ЗАВЕРШЕН. Всего товаров: {$totalProducts}. Общее время: " . round((microtime(true) - $startTime) * 1000) . ' мс');
 
         return $stats;
     }
