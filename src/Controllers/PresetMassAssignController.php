@@ -116,6 +116,6 @@ class PresetMassAssignController extends TemplateController
                 return $item;
             });
 
-        return response()->json($resources);
+        return $this->apiResponse->success($resources);
     }
 }

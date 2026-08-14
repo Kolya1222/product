@@ -3,7 +3,7 @@
 namespace roilafx\Product\Console\Commands;
 
 use Illuminate\Console\Command;
-use roilafx\Product\Services\ProductExportService;
+use roilafx\Product\Services\Export\ProductExportService;
 
 class ExportCatalogCommand extends Command
 {

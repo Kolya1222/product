@@ -8,7 +8,7 @@
             if (!this.urls.attributesTypes) return;
             var self = this;
             $.getJSON(this.urls.attributesTypes, function (response) {
-                var types = response.types;
+                var types = response.meta && response.meta.types ? response.meta.types : [];
                 $('.js-attr-type').each(function () {
                     var $select = $(this);
                     var currentVal = $select.val();
@@ -30,7 +30,7 @@
         loadCategories: function (selector, selectedId) {
             var self = this;
             $.get(this.urls.categoriesList, function (response) {
-                var cats = Array.isArray(response) ? response : (response.data || response.categories || []);
+                var cats = response.data || [];
                 var options = '<option value="">Без категории</option>';
                 cats.forEach(function (c) {
                     options += '<option value="' + c.id + '"' + (c.id == selectedId ? ' selected' : '') + '>' + c.name + '</option>';
@@ -42,7 +42,7 @@
         loadCategoriesList: function () {
             var self = this;
             $.get(this.urls.categoriesList, function (response) {
-                var cats = Array.isArray(response) ? response : (response.data || response.categories || []);
+                var cats = response.data || [];
                 var html = '';
                 cats.forEach(function (c) {
                     html += '<div style="margin-bottom:3px;">' +
@@ -70,7 +70,8 @@
                         self.loadCategoriesList();
                     },
                     error: function (xhr) {
-                        alert('Ошибка: ' + (xhr.responseJSON?.message || ''));
+                        var msg = xhr.responseJSON?.errors?.[0]?.title || 'Ошибка';
+                        alert('Ошибка: ' + msg);
                     }
                 });
             });
@@ -83,7 +84,11 @@
                         url: self.urls.categoriesUpdate + '/' + id,
                         method: 'PUT',
                         data: { name: newName, _token: self.csrfToken },
-                        success: function () { self.loadCategoriesList(); }
+                        success: function () { self.loadCategoriesList(); },
+                        error: function (xhr) {
+                            var msg = xhr.responseJSON?.errors?.[0]?.title || 'Ошибка';
+                            alert('Ошибка: ' + msg);
+                        }
                     });
                 }
             });
@@ -95,7 +100,11 @@
                     url: self.urls.categoriesDelete + '/' + id,
                     method: 'DELETE',
                     data: { _token: self.csrfToken },
-                    success: function () { self.loadCategoriesList(); }
+                    success: function () { self.loadCategoriesList(); },
+                    error: function (xhr) {
+                        var msg = xhr.responseJSON?.errors?.[0]?.title || 'Ошибка';
+                        alert('Ошибка: ' + msg);
+                    }
                 });
             });
         },
@@ -126,10 +135,20 @@
                     success: function (response) {
                         modal.hide();
                         modal.find('.js-attr-name, .js-attr-code, .js-attr-options').val('');
-                        if (successCallback) successCallback(response);
+                        if (successCallback) {
+                            var resource = response.data;
+                            if (resource) {
+                                var attr = resource.attributes || {};
+                                attr.id = resource.id;
+                                successCallback({ attribute: attr });
+                            } else {
+                                successCallback(response);
+                            }
+                        }
                     },
                     error: function (xhr) {
-                        alert('Ошибка: ' + (xhr.responseJSON?.message || ''));
+                        var msg = xhr.responseJSON?.errors?.[0]?.title || 'Ошибка';
+                        alert('Ошибка: ' + msg);
                     }
                 });
             });
@@ -264,6 +283,9 @@
                 }, function () {
                     $('#setupFieldsModal').hide();
                     self.checkAssignedAttributes();
+                }).fail(function (xhr) {
+                    var msg = xhr.responseJSON?.errors?.[0]?.title || 'Ошибка сохранения';
+                    alert('Ошибка: ' + msg);
                 });
             });
 
@@ -280,8 +302,10 @@
                 e.stopPropagation();
                 var attrId = $(this).data('id');
                 $.get(Core.urls.attributesList + '/' + attrId, function (response) {
-                    if (response.success) {
-                        var attr = response.attribute;
+                    var resource = response.data;
+                    if (resource) {
+                        var attr = resource.attributes || {};
+                        attr.id = resource.id;
                         var modal = $('#editAttributeModal');
                         modal.find('.js-attr-name').val(attr.name);
                         modal.find('.js-attr-code').val(attr.code);
@@ -295,6 +319,9 @@
                         Core.loadCategories('#editAttributeModal .js-attr-category', attr.category_id);
                         modal.data('attrId', attr.id).show();
                     }
+                }).fail(function (xhr) {
+                    var msg = xhr.responseJSON?.errors?.[0]?.title || 'Не удалось загрузить атрибут';
+                    alert('Ошибка: ' + msg);
                 });
             });
 
@@ -325,7 +352,8 @@
                         self.refreshCheckboxes();
                     },
                     error: function (xhr) {
-                        alert('Ошибка: ' + (xhr.responseJSON?.message || ''));
+                        var msg = xhr.responseJSON?.errors?.[0]?.title || 'Ошибка обновления';
+                        alert('Ошибка: ' + msg);
                     }
                 });
             });
@@ -340,7 +368,8 @@
                     data: { _token: Core.csrfToken },
                     success: function () { self.refreshCheckboxes(); },
                     error: function (xhr) {
-                        alert('Ошибка: ' + (xhr.responseJSON?.message || 'Не удалось удалить атрибут'));
+                        var msg = xhr.responseJSON?.errors?.[0]?.title || 'Не удалось удалить атрибут';
+                        alert('Ошибка: ' + msg);
                     }
                 });
             });
@@ -388,7 +417,8 @@
                         self.loadVariants();
                     },
                     error: function (xhr) {
-                        alert('Ошибка сохранения: ' + (xhr.responseJSON?.message || ''));
+                        var msg = xhr.responseJSON?.errors?.[0]?.title || 'Ошибка сохранения';
+                        alert('Ошибка: ' + msg);
                     }
                 });
             });
@@ -406,7 +436,8 @@
                     data: { _token: Core.csrfToken },
                     success: function () { self.loadVariants(); },
                     error: function (xhr) {
-                        alert('Ошибка удаления: ' + (xhr.responseJSON?.message || ''));
+                        var msg = xhr.responseJSON?.errors?.[0]?.title || 'Ошибка удаления';
+                        alert('Ошибка: ' + msg);
                     }
                 });
             });
@@ -440,7 +471,8 @@
                         alert('Пресет "' + name + '" создан.');
                     },
                     error: function (xhr) {
-                        alert('Ошибка: ' + (xhr.responseJSON?.message || ''));
+                        var msg = xhr.responseJSON?.errors?.[0]?.title || 'Ошибка создания пресета';
+                        alert('Ошибка: ' + msg);
                     }
                 });
             });
@@ -450,20 +482,32 @@
 
         refreshCheckboxes: function () {
             var self = this;
-            $.get(Core.urls.attributesList, { product_id: this.productId }, function (data) {
+            $.get(Core.urls.attributesList, { product_id: this.productId }, function (response) {
+                var categories = response.data || [];
                 var html = '';
-                data.categories.forEach(function (group) {
-                    html += '<h6>' + group.category.name + '</h6>';
-                    group.attributes.forEach(function (a) {
-                        html += '<div><label><input type="checkbox" value="' + a.id + '" ' + (a.assigned ? 'checked' : '') + '> ' + a.name + ' (' + a.code + ')</label> ';
+                var all = [];
+
+                categories.forEach(function (category) {
+                    var catName = category.attributes ? category.attributes.name : 'Без категории';
+                    html += '<h6>' + catName + '</h6>';
+
+                    var attrs = (category.relationships && category.relationships.attributes)
+                        ? category.relationships.attributes.data
+                        : [];
+
+                    attrs.forEach(function (a) {
+                        var attrData = a.attributes || {};
+                        var checked = attrData.assigned ? 'checked' : '';
+                        html += '<div><label><input type="checkbox" value="' + a.id + '" ' + checked + '> ' + attrData.name + ' (' + attrData.code + ')</label> ';
                         html += '<button class="btn btn-xs btn-secondary js-edit-attr-btn" data-id="' + a.id + '"><i class="fa fa-pencil"></i></button>';
                         html += '<button class="btn btn-xs btn-danger js-delete-attr-btn" data-id="' + a.id + '"><i class="fa fa-trash"></i></button></div>';
+                        all.push({ id: a.id, name: attrData.name, code: attrData.code, assigned: attrData.assigned });
                     });
                 });
+
                 $('#setupFieldsModal .js-attributes-checkboxes').html(html);
-                var all = [];
-                data.categories.forEach(function (g) { all = all.concat(g.attributes); });
                 self.currentAttributes = all.filter(function (a) { return a.assigned; });
+
                 if (self.currentAttributes.length) {
                     $('#no-attributes-msg').hide();
                     $('#variants-content').show();
@@ -473,6 +517,9 @@
                     $('#no-attributes-msg').show();
                     $('#variants-content').hide();
                 }
+            }).fail(function (xhr) {
+                var msg = xhr.responseJSON?.errors?.[0]?.title || 'Ошибка загрузки атрибутов';
+                alert('Ошибка: ' + msg);
             });
         },
 
@@ -482,7 +529,8 @@
 
         loadVariants: function () {
             var self = this;
-            $.get(Core.urls.variantsList, { product_id: this.productId }, function (variants) {
+            $.get(Core.urls.variantsList, { product_id: this.productId }, function (response) {
+                var variants = response.data || [];
                 if (!self.currentAttributes.length) {
                     $('#variants-header, #variants-table tbody').html('');
                     $('#add-variant-btn').hide();
@@ -492,13 +540,19 @@
                 $('#variants-header').html(header);
                 var rows = '';
                 variants.forEach(function (v) {
-                    var cells = self.currentAttributes.map(function (a) { return '<td>' + (v.attrs[a.code] || '') + '</td>'; }).join('');
+                    var attrs = (v.attributes && v.attributes.attrs) ? v.attributes.attrs : {};
+                    var cells = self.currentAttributes.map(function (a) {
+                        return '<td>' + (attrs[a.code] || '') + '</td>';
+                    }).join('');
                     rows += '<tr data-id="' + v.id + '">' + cells +
                         '<td><button class="btn btn-sm btn-info edit-variant" data-id="' + v.id + '">Ред.</button> ' +
                         '<button class="btn btn-sm btn-danger delete-variant" data-id="' + v.id + '">Удал.</button></td></tr>';
                 });
                 $('#variants-table tbody').html(rows);
                 $('#add-variant-btn').show();
+            }).fail(function (xhr) {
+                var msg = xhr.responseJSON?.errors?.[0]?.title || 'Ошибка загрузки вариантов';
+                alert('Ошибка: ' + msg);
             });
         },
 
@@ -509,9 +563,14 @@
             $.get(url, function (html) {
                 $('#variantModalBody').html(html);
                 $('#variant-form input[name="_token"]').val(Core.csrfToken);
+            }).fail(function (xhr) {
+                var msg = xhr.responseJSON?.errors?.[0]?.title || 'Ошибка загрузки формы';
+                alert('Ошибка: ' + msg);
+                $('#variantModal').hide();
             });
         }
     };
+
     window.GeneralAttributesTab = {
         init: function (config) {
             this.productId = config.productId;
@@ -542,7 +601,8 @@
                         self.checkAssigned();
                     },
                     error: function (xhr) {
-                        alert('Ошибка: ' + (xhr.responseJSON?.message || ''));
+                        var msg = xhr.responseJSON?.errors?.[0]?.title || 'Ошибка сохранения';
+                        alert('Ошибка: ' + msg);
                     }
                 });
             });
@@ -578,7 +638,8 @@
                         self.checkAssigned();
                     },
                     error: function (xhr) {
-                        alert('Ошибка сохранения: ' + (xhr.responseJSON?.message || ''));
+                        var msg = xhr.responseJSON?.errors?.[0]?.title || 'Ошибка сохранения';
+                        alert('Ошибка: ' + msg);
                     }
                 });
             });
@@ -588,32 +649,46 @@
 
         refreshCheckboxes: function () {
             var self = this;
-            $.get(this.urls.attributesList, { product_id: this.productId, type: 'general' }, function (data) {
+            $.get(this.urls.attributesList, { product_id: this.productId, type: 'general' }, function (response) {
+                var categories = response.data || [];
                 var html = '';
-                data.categories.forEach(function (group) {
-                    html += '<h6>' + group.category.name + '</h6>';
-                    group.attributes.forEach(function (a) {
-                        html += '<div><label><input type="checkbox" value="' + a.id + '" ' + (a.assigned ? 'checked' : '') + '> ' + a.name + ' (' + a.code + ')</label></div>';
+                categories.forEach(function (category) {
+                    var catName = category.attributes ? category.attributes.name : 'Без категории';
+                    html += '<h6>' + catName + '</h6>';
+                    var attrs = (category.relationships && category.relationships.attributes)
+                        ? category.relationships.attributes.data
+                        : [];
+                    attrs.forEach(function (a) {
+                        var attrData = a.attributes || {};
+                        var checked = attrData.assigned ? 'checked' : '';
+                        html += '<div><label><input type="checkbox" value="' + a.id + '" ' + checked + '> ' + attrData.name + ' (' + attrData.code + ')</label></div>';
                     });
                 });
                 $('#setupGeneralFieldsModal .js-attributes-checkboxes').html(html);
+            }).fail(function (xhr) {
+                var msg = xhr.responseJSON?.errors?.[0]?.title || 'Ошибка загрузки атрибутов';
+                alert('Ошибка: ' + msg);
             });
         },
 
         checkAssigned: function () {
             var self = this;
-            $.get(this.urls.attributesList, { product_id: this.productId, type: 'general' }, function (data) {
+            $.get(this.urls.attributesList, { product_id: this.productId, type: 'general' }, function (response) {
+                var categories = response.data || [];
                 var hasAssigned = false;
                 var valuesHtml = '<div class="row">';
 
-                data.categories.forEach(function (g) {
-                    g.attributes.forEach(function (a) {
-                        if (a.assigned) {
+                categories.forEach(function (category) {
+                    var attrs = (category.relationships && category.relationships.attributes)
+                        ? category.relationships.attributes.data
+                        : [];
+                    attrs.forEach(function (a) {
+                        var attrData = a.attributes || {};
+                        if (attrData.assigned) {
                             hasAssigned = true;
-                            var displayValue = (a.value && a.value !== '') ? a.value : '<span class="text-muted">—</span>';
-                            
+                            var displayValue = (attrData.value && attrData.value !== '') ? attrData.value : '<span class="text-muted">—</span>';
                             valuesHtml += '<div class="col-md-6" style="margin-bottom: 5px; font-size: 14px; border-bottom: 1px dashed #eee; padding-bottom: 3px;">';
-                            valuesHtml += '<b style="color: #555;">' + a.name + ':</b> ' + displayValue;
+                            valuesHtml += '<b style="color: #555;">' + attrData.name + ':</b> ' + displayValue;
                             valuesHtml += '</div>';
                         }
                     });
@@ -628,6 +703,9 @@
                     $('.js-edit-general-fields-btn').hide();
                     $('#general-attrs-container').html('<p class="text-muted">Нет назначенных характеристик. Нажмите "Настроить поля".</p>');
                 }
+            }).fail(function (xhr) {
+                var msg = xhr.responseJSON?.errors?.[0]?.title || 'Ошибка загрузки атрибутов';
+                alert('Ошибка: ' + msg);
             });
         },
 
@@ -636,6 +714,10 @@
             $('#generalAttrsModal').show();
             $.get(this.urls.generalForm, { product_id: this.productId }, function (html) {
                 $('#generalAttrsModalBody').html(html);
+            }).fail(function (xhr) {
+                var msg = xhr.responseJSON?.errors?.[0]?.title || 'Ошибка загрузки формы';
+                alert('Ошибка: ' + msg);
+                $('#generalAttrsModal').hide();
             });
         }
     };

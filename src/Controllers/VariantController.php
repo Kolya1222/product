@@ -2,32 +2,35 @@
 
 namespace roilafx\Product\Controllers;
 
-use roilafx\Product\Models\ProductVariant;
-use roilafx\Product\Services\ProductVariantService;
-use roilafx\Product\Traits\ApiResponses;
-use roilafx\Product\Models\ProductVariantAttribute;
-use roilafx\Product\Models\Attribute;
-use roilafx\Product\Services\AttributePresetService;
-use roilafx\Product\Helpers\TvRenderer;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use roilafx\Product\Helpers\TvRenderer;
+use roilafx\Product\Models\Attribute;
+use roilafx\Product\Models\AttributePreset;
+use roilafx\Product\Models\ProductVariant;
+use roilafx\Product\Models\ProductVariantAttribute;
+use roilafx\Product\Services\AttributePresetService;
+use roilafx\Product\Services\ProductVariantService;
+use roilafx\Product\Responses\ApiResponse;
+use roilafx\Product\Resources\VariantResource;
+use roilafx\Product\Resources\PresetResource;
 
 class VariantController
 {
-    use ApiResponses;
-
     private ProductVariantService $variantService;
+    private ApiResponse $apiResponse;
 
-    public function __construct(ProductVariantService $variantService)
+    public function __construct(ProductVariantService $variantService, ApiResponse $apiResponse)
     {
         $this->variantService = $variantService;
+        $this->apiResponse = $apiResponse;
     }
 
     public function index(Request $request)
     {
         $productId = $request->input('product_id');
         $variants = $this->variantService->getVariantsForProduct($productId);
-        return response()->json($variants);
+        return $this->apiResponse->success(VariantResource::collection($variants));
     }
 
     public function create(Request $request)
@@ -76,15 +79,16 @@ class VariantController
     {
         $productId = $request->input('product_id');
         $attrs = $request->input('attrs', []);
-        $this->variantService->createVariant($productId, $attrs);
-        return $this->successResponse();
+        $variant = $this->variantService->createVariant($productId, $attrs);
+        return $this->apiResponse->success(new VariantResource($variant), 201);
     }
 
     public function update(Request $request, $id)
     {
         $variant = ProductVariant::findOrFail($id);
         $this->variantService->updateVariant($variant, $request->input('attrs', []));
-        return $this->successResponse();
+        $variant->refresh();
+        return $this->apiResponse->success(new VariantResource($variant));
     }
 
     public function destroy($id)
@@ -94,7 +98,7 @@ class VariantController
         $variant->delete();
 
         Cache::forget('product_variants_' . $productId);
-        return $this->successResponse();
+        return $this->apiResponse->success(null, 204);
     }
 
     private function getProductAttributes($productId)
@@ -111,16 +115,16 @@ class VariantController
         $attributeIds = $request->input('attribute_ids', []);
 
         if (empty($name)) {
-            return $this->errorResponse('Название пресета обязательно');
+            return $this->apiResponse->error('Название пресета обязательно');
         }
 
-        $exists = \roilafx\Product\Models\AttributePreset::where('name', $name)->exists();
+        $exists = AttributePreset::where('name', $name)->exists();
         if ($exists) {
-            return $this->errorResponse('Пресет с таким именем уже существует');
+            return $this->apiResponse->error('Пресет с таким именем уже существует');
         }
 
         if (empty($attributeIds)) {
-            return $this->errorResponse('Нет атрибутов для сохранения');
+            return $this->apiResponse->error('Нет атрибутов для сохранения');
         }
 
         $attributes = [];
@@ -138,6 +142,6 @@ class VariantController
             'attributes'  => $attributes,
         ]);
 
-        return $this->successResponse(['preset' => $preset]);
+        return $this->apiResponse->success(new PresetResource($preset), 201);
     }
 }

@@ -4,18 +4,21 @@ namespace roilafx\Product\Controllers;
 
 use EvolutionCMS\TemplateController;
 use Illuminate\Http\Request;
-use roilafx\Product\Services\ProductExportService;
+use roilafx\Product\Services\Export\ProductExportService;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Illuminate\Support\Str;
+use roilafx\Product\Responses\ApiResponse;
 
 class ProductExportController extends TemplateController
 {
     private ProductExportService $exportService;
+    private ApiResponse $apiResponse;
 
-    public function __construct(ProductExportService $exportService)
+    public function __construct(ProductExportService $exportService, ApiResponse $apiResponse)
     {
         $this->exportService = $exportService;
+        $this->apiResponse = $apiResponse;
     }
 
     public function index()
@@ -31,7 +34,7 @@ class ProductExportController extends TemplateController
         $totalProducts = $this->exportService->getTotalProducts($parentId);
 
         if ($totalProducts === 0) {
-            return response()->json(['success' => false, 'message' => 'Нет товаров для экспорта']);
+            return $this->apiResponse->error('Нет товаров для экспорта', 404);
         }
 
         $headers = $this->exportService->getHeaders($parentId);
@@ -51,7 +54,10 @@ class ProductExportController extends TemplateController
             'offset' => 0
         ]]);
 
-        return response()->json(['success' => true, 'export_id' => $exportId, 'total' => $totalProducts]);
+        return $this->apiResponse->success([
+            'export_id' => $exportId,
+            'total' => $totalProducts
+        ]);
     }
 
     public function processChunk(Request $request)
@@ -60,7 +66,7 @@ class ProductExportController extends TemplateController
         $sessionData = session('export_' . $exportId);
 
         if (!$sessionData) {
-            return response()->json(['success' => false, 'message' => 'Сессия истекла'], 404);
+            return $this->apiResponse->error('Сессия истекла', 404);
         }
 
         $limit = 500;
@@ -77,8 +83,7 @@ class ProductExportController extends TemplateController
 
         $isFinished = count($rows) < $limit;
 
-        return response()->json([
-            'success' => true,
+        return $this->apiResponse->success([
             'processed' => count($rows),
             'offset' => $sessionData['offset'],
             'finished' => $isFinished
@@ -101,7 +106,7 @@ class ProductExportController extends TemplateController
         if ($format === 'xlsx') {
             $spreadsheet = new Spreadsheet();
             $sheet = $spreadsheet->getActiveSheet();
-            
+
             if (($handle = fopen($csvFile, "r")) !== FALSE) {
                 $row = 1;
                 while (($data = fgetcsv($handle, 0, ",")) !== FALSE) {
@@ -110,7 +115,7 @@ class ProductExportController extends TemplateController
                 }
                 fclose($handle);
             }
-            
+
             $tempXlsx = tempnam(sys_get_temp_dir(), 'xpx_');
             $writer = new Xlsx($spreadsheet);
             $writer->save($tempXlsx);

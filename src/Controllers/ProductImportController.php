@@ -11,16 +11,19 @@ use roilafx\Product\Models\Attribute;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Validator;
+use roilafx\Product\Responses\ApiResponse;
 
 class ProductImportController extends TemplateController
 {
     private ImportOrchestrator $orchestrator;
     private DataTransformer $transformer;
+    private ApiResponse $apiResponse;
 
-    public function __construct(ImportOrchestrator $orchestrator, DataTransformer $transformer)
+    public function __construct(ImportOrchestrator $orchestrator, DataTransformer $transformer, ApiResponse $apiResponse)
     {
         $this->orchestrator = $orchestrator;
         $this->transformer = $transformer;
+        $this->apiResponse = $apiResponse;
     }
 
     public function index()
@@ -33,8 +36,6 @@ class ProductImportController extends TemplateController
         return view($this->getView(), $this->getViewData());
     }
 
-    // === ФАЗА 1: ЗАГРУЗКА ФАЙЛА КУСКАМИ (Chunked Upload) ===
-
     public function uploadChunk(Request $request)
     {
         $validator = Validator::make($request->all(), [
@@ -45,7 +46,7 @@ class ProductImportController extends TemplateController
         ]);
 
         if ($validator->fails()) {
-            return response()->json(['success' => false, 'message' => $validator->errors()->first()], 422);
+            return $this->apiResponse->error($validator->errors()->first(), 422);
         }
 
         $dir = EVO_STORAGE_PATH . '/imports/tmp_' . $request->upload_id;
@@ -53,7 +54,7 @@ class ProductImportController extends TemplateController
 
         $request->file('file')->move($dir, 'chunk_' . $request->chunk_index);
 
-        return response()->json(['success' => true]);
+        return $this->apiResponse->success(null, 200);
     }
 
     public function finalizeUpload(Request $request)
@@ -65,7 +66,7 @@ class ProductImportController extends TemplateController
         ]);
 
         if ($validator->fails()) {
-            return response()->json(['success' => false, 'message' => $validator->errors()->first()], 422);
+            return $this->apiResponse->error($validator->errors()->first(), 422);
         }
 
         $tmpDir = EVO_STORAGE_PATH . '/imports/tmp_' . $request->upload_id;
@@ -78,14 +79,14 @@ class ProductImportController extends TemplateController
 
         $out = fopen($finalPath, 'wb');
         if ($out === false) {
-            return response()->json(['success' => false, 'message' => 'Не удалось создать файл'], 500);
+            return $this->apiResponse->error('Не удалось создать файл', 500);
         }
 
         for ($i = 0; $i < $request->total_chunks; $i++) {
             $chunkPath = $tmpDir . '/chunk_' . $i;
             if (!file_exists($chunkPath)) {
                 fclose($out);
-                return response()->json(['success' => false, 'message' => 'Потерян кусок ' . $i], 500);
+                return $this->apiResponse->error('Потерян кусок ' . $i, 500);
             }
             $in = fopen($chunkPath, 'rb');
             stream_copy_to_stream($in, $out);
@@ -95,13 +96,9 @@ class ProductImportController extends TemplateController
         fclose($out);
         rmdir($tmpDir);
 
-        return response()->json([
-            'success' => true,
-            'file_path' => $safeName
-        ]);
+        return $this->apiResponse->success(['file_path' => $safeName]);
     }
 
-    // === ФАЗА 2: ЧТЕНИЕ И ОБРАБОТКА (Smart Chunking) ===
     public function readChunk(Request $request)
     {
         $validator = Validator::make($request->all(), [
@@ -111,13 +108,13 @@ class ProductImportController extends TemplateController
         ]);
 
         if ($validator->fails()) {
-            return response()->json(['success' => false, 'message' => $validator->errors()->first()], 422);
+            return $this->apiResponse->error($validator->errors()->first(), 422);
         }
 
         $filePath = EVO_STORAGE_PATH . '/imports/' . basename($request->file_path);
 
         if (!file_exists($filePath)) {
-            return response()->json(['success' => false, 'message' => 'Файл не найден'], 404);
+            return $this->apiResponse->error('Файл не найден', 404);
         }
 
         if ($request->filled('config_id')) {
@@ -220,7 +217,10 @@ class ProductImportController extends TemplateController
             }
         }
 
-        return response()->json(['success' => true, 'rows' => $rows, 'next_start_row' => $currentRow]);
+        return $this->apiResponse->success([
+            'rows' => $rows,
+            'next_start_row' => $currentRow
+        ]);
     }
 
     private function smartChunkLookup(array $rows, $handle, array $mapping, int $monsterLimit, int &$currentRow, string $delimiter = ','): array
@@ -286,18 +286,17 @@ class ProductImportController extends TemplateController
         }
 
         if (!empty($rows) && empty($groupedProducts)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Не удалось сгруппировать товары. Проверьте, что в файле есть колонка "pagetitle".'
-            ]);
+            return $this->apiResponse->error(
+                'Не удалось сгруппировать товары. Проверьте, что в файле есть колонка "pagetitle".',
+                422
+            );
         }
 
         $stats = $this->orchestrator->processChunk($groupedProducts, $syncMode, $isTest);
 
-        return response()->json(['success' => true, 'stats' => $stats]);
+        return $this->apiResponse->success(['stats' => $stats]);
     }
 
-    // === УПРАВЛЕНИЕ ПРОФИЛЯМИ МАППИНГА ===
     public function createConfig()
     {
         $this->setView('products::import.config_form');
@@ -369,8 +368,6 @@ class ProductImportController extends TemplateController
 
         return $mapping;
     }
-
-    // --- Вспомогательные методы ---
 
     private function extractUniqueKey(array $row, array $mapping): ?string
     {

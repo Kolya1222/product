@@ -5,18 +5,24 @@ namespace roilafx\Product\Controllers;
 use roilafx\Product\Models\Attribute;
 use roilafx\Product\Models\AttributeCategory;
 use roilafx\Product\Validators\StoreCategoryValidator;
-use roilafx\Product\Traits\ApiResponses;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use roilafx\Product\Responses\ApiResponse;
+use roilafx\Product\Resources\CategoryResource;
 
 class CategoryController
 {
-    use ApiResponses;
+    private ApiResponse $apiResponse;
+
+    public function __construct(ApiResponse $apiResponse)
+    {
+        $this->apiResponse = $apiResponse;
+    }
 
     public function index()
     {
         $categories = AttributeCategory::orderBy('name')->get();
-        return $this->successResponse(['categories' => $categories]);
+        return $this->apiResponse->success(CategoryResource::collection($categories));
     }
 
     public function store(Request $request)
@@ -27,21 +33,21 @@ class CategoryController
         );
 
         if ($validator->fails()) {
-            return $this->errorResponse($validator->errors()->first());
+            return $this->apiResponse->error($validator->errors()->first());
         }
 
         $category = AttributeCategory::create([
             'name' => $validator->validated()['name']
         ]);
 
-        return $this->successResponse(['category' => $category]);
+        return $this->apiResponse->success(new CategoryResource($category), 201);
     }
 
     public function update(Request $request, $id)
     {
         $category = AttributeCategory::find($id);
         if (!$category) {
-            return $this->errorResponse('Категория не найдена', 404);
+            return $this->apiResponse->error('Категория не найдена', 404);
         }
 
         $validator = Validator::make(
@@ -50,12 +56,12 @@ class CategoryController
         );
 
         if ($validator->fails()) {
-            return $this->errorResponse($validator->errors()->first());
+            return $this->apiResponse->error($validator->errors()->first());
         }
 
         $category->update(['name' => $validator->validated()['name']]);
 
-        return $this->successResponse(['category' => $category]);
+        return $this->apiResponse->success(new CategoryResource($category));
     }
 
     public function destroy($id)
@@ -65,6 +71,6 @@ class CategoryController
             Attribute::where('category_id', $id)->update(['category_id' => null]);
             $category->delete();
         }
-        return $this->successResponse();
+        return $this->apiResponse->success(null, 204);
     }
 }

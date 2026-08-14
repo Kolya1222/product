@@ -11,18 +11,14 @@ use Illuminate\Support\Facades\Cache;
 
 class ProductVariantService
 {
-    public function getVariantsForProduct(int $productId): array
+    public function getVariantsForProduct(int $productId): \Illuminate\Support\Collection
     {
         $cacheKey = 'product_variants_' . $productId;
         return Cache::remember($cacheKey, 600, function () use ($productId) {
             return ProductVariant::where('product_id', $productId)
                 ->where('active', 1)
                 ->orderBy('sort')
-                ->get()
-                ->map(function ($variant) {
-                    return ['id' => $variant->id, 'attrs' => json_decode($variant->attrs_json, true) ?? []];
-                })
-                ->toArray();
+                ->get();
         });
     }
 
@@ -97,7 +93,7 @@ class ProductVariantService
         }
 
         if (!empty($insertData)) {
-            VariantAttributeValue::insert($insertData); 
+            VariantAttributeValue::insert($insertData);
         }
 
         $this->updateVariantJson($variant);

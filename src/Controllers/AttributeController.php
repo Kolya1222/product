@@ -14,27 +14,58 @@ use roilafx\Product\Models\ProductAttribute;
 use roilafx\Product\Models\ProductVariantAttribute;
 use roilafx\Product\Models\VariantAttributeValue;
 use roilafx\Product\Services\AttributeService;
-use roilafx\Product\Traits\ApiResponses;
 use roilafx\Product\Validators\StoreAttributeValidator;
 use roilafx\Product\Validators\UpdateAttributeValidator;
+use roilafx\Product\Responses\ApiResponse;
+use roilafx\Product\Resources\CategoryResource;
+use roilafx\Product\Resources\AttributeResource;
 
 class AttributeController
 {
-    use ApiResponses;
-
     private AttributeService $attributeService;
+    private ApiResponse $apiResponse;
 
-    public function __construct(AttributeService $attributeService)
+    public function __construct(AttributeService $attributeService, ApiResponse $apiResponse)
     {
         $this->attributeService = $attributeService;
+        $this->apiResponse = $apiResponse;
     }
 
     public function index(Request $request)
     {
         $productId = $request->input('product_id');
         $type = $request->input('type', 'variant');
-        $categories = $this->attributeService->getGroupedAttributesByProduct($productId, $type);
-        return $this->successResponse(['categories' => $categories]);
+        $categoriesData = $this->attributeService->getGroupedAttributesByProduct($productId, $type);
+
+        $categories = collect($categoriesData)->map(function ($group) {
+            $categoryObj = (object) [
+                'id' => $group['category']['id'],
+                'name' => $group['category']['name'],
+            ];
+
+            $category = new \stdClass();
+            $category->id = $group['category']['id'];
+            $category->name = $group['category']['name'];
+            $category->created_at = $group['category']['created_at'] ?? null;
+            $category->updated_at = $group['category']['updated_at'] ?? null;
+
+            $category->attributes = collect($group['attributes'])->map(function ($attrData) use ($categoryObj) {
+                $attr = new \stdClass();
+                $attr->id = $attrData['id'];
+                $attr->name = $attrData['name'];
+                $attr->code = $attrData['code'];
+                $attr->field_type = $attrData['field_type'];
+                $attr->options = $attrData['options'];
+                $attr->assigned = $attrData['assigned'] ?? false;
+                $attr->value = $attrData['value'] ?? null;
+                $attr->category = $categoryObj;
+                return $attr;
+            });
+
+            return $category;
+        });
+
+        return $this->apiResponse->success(CategoryResource::collection($categories));
     }
 
     public function assign(Request $request)
@@ -42,13 +73,13 @@ class AttributeController
         $productId = $request->input('product_id');
         $attributeIds = $request->input('attribute_ids', []);
         $this->attributeService->assignAttributesToProduct($productId, $attributeIds);
-        return $this->successResponse();
+        return $this->apiResponse->success(null, 204);
     }
 
     public function show($id)
     {
         $attribute = Attribute::findOrFail($id);
-        return $this->successResponse(['attribute' => $attribute]);
+        return $this->apiResponse->success(new AttributeResource($attribute));
     }
 
     public function store(Request $request)
@@ -60,14 +91,14 @@ class AttributeController
         );
 
         if ($validator->fails()) {
-            return $this->errorResponse($validator->errors()->first());
+            return $this->apiResponse->error($validator->errors()->first());
         }
 
         $productId = $request->input('product_id');
         if ($productId) {
             $productExists = SiteContent::where('id', $productId)->exists();
             if (!$productExists) {
-                return $this->errorResponse('Товар не найден', 404);
+                return $this->apiResponse->error('Товар не найден', 404);
             }
         }
 
@@ -76,7 +107,7 @@ class AttributeController
             $productId
         );
 
-        return $this->successResponse(['attribute' => $attribute]);
+        return $this->apiResponse->success(new AttributeResource($attribute), 201);
     }
 
     public function update(Request $request, $id)
@@ -88,25 +119,25 @@ class AttributeController
         );
 
         if ($validator->fails()) {
-            return $this->errorResponse($validator->errors()->first());
+            return $this->apiResponse->error($validator->errors()->first());
         }
 
         $attribute = Attribute::findOrFail($id);
         $attribute->update($validator->validated());
 
-        return $this->successResponse(['attribute' => $attribute]);
+        return $this->apiResponse->success(new AttributeResource($attribute));
     }
 
     public function types()
     {
-        return $this->successResponse(['types' => TvTypeHelper::forSelect()]);
+        return $this->apiResponse->success([], 200, null, ['types' => TvTypeHelper::forSelect()]);
     }
 
     public function generalForm(Request $request)
     {
         $productId = $request->input('product_id');
         $categories = $this->attributeService->getGroupedAttributesByProduct($productId, 'general');
-        
+
         $fields = [];
         foreach ($categories as $group) {
             foreach ($group['attributes'] as $attr) {
@@ -149,7 +180,7 @@ class AttributeController
             ProductFilter::clearFilterCache($product->parent);
         }
 
-        return $this->successResponse();
+        return $this->apiResponse->success();
     }
 
     public function assignGeneralAttributes(Request $request)
@@ -157,32 +188,32 @@ class AttributeController
         $productId = $request->input('product_id');
         $attributeIds = $request->input('attribute_ids', []);
         $this->attributeService->assignGeneralAttributesToProduct($productId, $attributeIds);
-        return $this->successResponse();
+        return $this->apiResponse->success();
     }
 
     public function destroy($id)
     {
         $attribute = Attribute::find($id);
         if (!$attribute) {
-            return $this->errorResponse('Атрибут не найден', 404);
+            return $this->apiResponse->error('Атрибут не найден', 404);
         }
 
         $usedInProducts = ProductVariantAttribute::where('attribute_id', $id)->count();
         if ($usedInProducts > 0) {
-            return $this->errorResponse('Атрибут назначен товарам. Сначала отвяжите его в настройках полей.', 422);
+            return $this->apiResponse->error('Атрибут назначен товарам. Сначала отвяжите его в настройках полей.', 422);
         }
 
         $usedInValues = VariantAttributeValue::where('attribute_id', $id)->count();
         if ($usedInValues > 0) {
-            return $this->errorResponse('Атрибут используется в значениях вариантов (' . $usedInValues . ' записей). Удалите варианты или очистите значения.', 422);
+            return $this->apiResponse->error('Атрибут используется в значениях вариантов (' . $usedInValues . ' записей). Удалите варианты или очистите значения.', 422);
         }
 
         $usedInPresets = AttributePresetAttribute::where('attribute_id', $id)->count();
         if ($usedInPresets > 0) {
-            return $this->errorResponse('Атрибут используется в пресетах (' . $usedInPresets . ' шт.). Сначала удалите его из пресетов.', 422);
+            return $this->apiResponse->error('Атрибут используется в пресетах (' . $usedInPresets . ' шт.). Сначала удалите его из пресетов.', 422);
         }
 
         $attribute->delete();
-        return $this->successResponse();
+        return $this->apiResponse->success(null, 204);
     }
 }
